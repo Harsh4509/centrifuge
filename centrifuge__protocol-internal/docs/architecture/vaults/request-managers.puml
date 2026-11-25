@@ -1,0 +1,66 @@
+@startuml request-managers
+title Vault Request Managers
+hide empty members
+
+skinparam linetype ortho
+
+skinparam nodesep 25
+
+package core {
+    class "Escrow" as Escrow<<pool>>
+    class Envoy
+    class Hub
+    interface IManagerCallFromHub
+    interface IHubRequestManager
+}
+
+package spoke {
+    class Spoke
+    class SpokeRegistry
+    interface ISpokeRequestManager
+}
+
+package "spoke side" {
+    class Vault
+    class VaultRequestRouter
+    interface IVaultRequestManager
+    interface IVaultRequestRouter
+    interface IVaultDepositCallbacks
+    interface IVaultRedeemCallbacks
+}
+
+package "hub side" {
+    class OrderBook
+    class FeeRequestManager
+    interface IRequestObserver
+    class StdHubPolicy
+}
+
+Vault -up-|> IVaultDepositCallbacks
+Vault -up-|> IVaultRedeemCallbacks
+Vault --> IVaultRequestManager : flush
+Vault --> Spoke : issue / revoke / reserve
+Vault ..> SpokeRegistry : request manager of pool
+
+VaultRequestRouter -up-|> IVaultRequestManager
+VaultRequestRouter -up-|> IVaultRequestRouter
+VaultRequestRouter -up-|> ISpokeRequestManager
+VaultRequestRouter --> Spoke : request
+VaultRequestRouter --> IVaultDepositCallbacks : callbacks
+VaultRequestRouter --> IVaultRedeemCallbacks : callbacks
+
+Spoke -up-> Escrow
+
+Hub --> IHubRequestManager : request
+OrderBook ..|> IHubRequestManager : call surface only
+OrderBook -up-|> IManagerCallFromHub
+OrderBook --> Hub : requestCallback
+OrderBook ..> IRequestObserver : on arrival
+
+FeeRequestManager -up-|> IManagerCallFromHub
+FeeRequestManager --> Hub : managerCall(OrderBook)
+Envoy --> IManagerCallFromHub
+StdHubPolicy ..> OrderBook : bounds Fulfill / Cancel
+FeeRequestManager ..> StdHubPolicy : authorizationDelay(original caller)
+
+@enduml

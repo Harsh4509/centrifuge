@@ -1,0 +1,35 @@
+{
+  "analysis_id": "b20555a7-4e61-4073-a103-de74ec24d806",
+  "codebases": [
+    {
+      "branch": "vaults-v2-facets-squashed",
+      "commit_sha": "df05a1109ddeda145b310ca7ebf28e527f2cca7e",
+      "directory": "centrifuge__protocol-internal",
+      "id": "e40d8a97-ca74-499a-947a-608e65bffb3d",
+      "in_scope_files": [
+        "src/vaults/Vault.sol",
+        "src/vaults/factories/VaultFactory.sol",
+        "src/vaults/hub/FeeRequestManager.sol",
+        "src/vaults/hub/OrderBook.sol",
+        "src/vaults/libraries/BucketLib.sol",
+        "src/vaults/libraries/HorizonLib.sol",
+        "src/vaults/libraries/RoleCheckLib.sol",
+        "src/vaults/libraries/VaultPricingLib.sol",
+        "src/vaults/libraries/VaultRequestIdLib.sol",
+        "src/vaults/liquidity/BasinLiquidityRoute.sol",
+        "src/vaults/liquidity/VaultLiquidityRoute.sol",
+        "src/vaults/messaging/VaultRequestRouter.sol",
+        "src/vaults/messaging/libraries/RequestCallbackMessageLib.sol",
+        "src/vaults/messaging/libraries/RequestMessageLib.sol",
+        "src/vaults/oracles/SpokeOracle.sol",
+        "src/vaults/policies/RequestPolicies.sol",
+        "src/vaults/policies/ReserveInstantPolicy.sol",
+        "src/token/hooks/HookPolicies.sol",
+        "src/token/hooks/ShareTokenHook.sol"
+      ],
+      "repo_name": "centrifuge/protocol-internal"
+    }
+  ],
+  "mode": "pinned",
+  "version": 2
+}

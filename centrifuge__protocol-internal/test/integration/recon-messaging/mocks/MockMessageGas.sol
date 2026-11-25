@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+pragma solidity 0.8.28;
+
+import {IAdapterGasService} from "../../../../src/admin/interfaces/IAdapterGasService.sol";
+
+/// @dev Gas values only; the framing view lives on CountingProcessor. Also the receive-cost view a
+///      StandbyAdapter reads through `MultiAdapter.messageGas()` to size a forward.
+contract MockMessageGas is IAdapterGasService {
+    /// @dev Must exceed FAILURE_GAS_RESERVE so `_safeProcess` forwards positive gas to the processor
+    uint128 public constant PROCESSING_GAS_LIMIT = 200_000;
+    uint128 public constant MAX_BATCH_GAS = 10_000_000;
+    /// @dev Reserved per message to record a processor failure; subtracted from PROCESSING_GAS_LIMIT.
+    uint128 public constant FAILURE_GAS_RESERVE = 35_000;
+    /// @dev Non-zero so a forward's gas limit differs from the one the standby was sent.
+    uint128 public constant RECEIVE_COST = 3_500;
+
+    function messageOverallGasLimit(uint16, bytes calldata) external pure returns (uint128) {
+        return 0;
+    }
+
+    function messageProcessingGasLimit(uint16, bytes calldata) external pure returns (uint128) {
+        return PROCESSING_GAS_LIMIT;
+    }
+
+    function maxBatchGasLimit(uint16) external pure returns (uint128) {
+        return MAX_BATCH_GAS;
+    }
+
+    function messageFailureGasReserve() external pure returns (uint128) {
+        return FAILURE_GAS_RESERVE;
+    }
+
+    function receiveCost(uint16, bytes32) external pure returns (uint128) {
+        return RECEIVE_COST;
+    }
+}

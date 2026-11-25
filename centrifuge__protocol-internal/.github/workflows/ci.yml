@@ -1,0 +1,245 @@
+name: "CI"
+
+on:
+  # Not on PRs into the release branches: live only adds files on top of main, so everything here is already
+  # green on main, and live-checks.yml covers the added surface there
+  pull_request:
+    branches-ignore:
+      - "live-v*"
+  push:
+    branches:
+      - main
+
+env:
+  FOUNDRY_PROFILE: ci
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      # Inlining every source into each artifact's metadata nearly doubles solc's peak memory, past what the
+      # runner holds; bytecode is unaffected, since foundry.toml strips the metadata hash and CBOR
+      FOUNDRY_USE_LITERAL_CONTENT: false
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: ./.github/actions/add-swap
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly-8e47a24a36283247c57fd735d1e6db961ca5efc1
+
+      - name: Build contracts
+        run: |
+          forge --version
+          forge build --deny warnings
+      - name: Check contract sizes
+        # EIP-170 for every src/ contract, except Vault and VaultFactory, which only deploy on chains with
+        # EIP-7907 and are held to its limit instead. Measured on the bytecode the ci profile builds, which is
+        # what a deployment ships; the allowlist and the limits live in the script
+        run: |
+          python3 script/checks/check_contract_sizes.py --self-test
+          python3 script/checks/check_contract_sizes.py
+
+      - name: Check formatting
+        run: forge fmt --check
+        env:
+          FOUNDRY_PROFILE: ci
+
+  import-order:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+
+      - name: Check import order
+        run: python3 script/checks/fix_imports.py --check-order
+
+  relative-imports:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+
+      - name: Check import order
+        run: python3 script/checks/fix_imports.py --check-relative
+
+  roundtrip-relative-absolute-imports:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+
+      - name: Check import order
+        run: python3 script/checks/fix_imports.py --test-roundtrip
+
+  unused-imports:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+
+      - name: Check unused imports
+        run: python3 script/checks/fix_imports.py --check-unused
+
+  # halmos:
+  #   runs-on: ubuntu-latest
+
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #       with:
+  #         submodules: recursive
+
+  #     - name: Setup Python
+  #       uses: actions/setup-python@v5
+  #       with:
+  #         python-version: 3.13
+  #         architecture: x64
+
+  #     - name: Install Foundry
+  #       uses: foundry-rs/foundry-toolchain@v1
+  #       with:
+  #         version: nightly
+
+  #     - name: Install `setuptools`
+  #       run: pip install setuptools
+
+  #     - name: Install Halmos
+  #       run: pip install git+https://github.com/a16z/halmos.git@main
+
+  #     - name: Show the Halmos version
+  #       run: halmos --version
+
+  #     - name: Run Halmos symbolic tests
+  #       run: halmos --contract TestMessageLibIdentities --function test
+
+  # Deploys the protocol on two local chains the way a real chain gets it: through the DeployGate, commit
+  # and deploy as separate runs. Needs no credentials and no network: the chains are bare anvil rather than
+  # forks, so this job carries no secrets and cannot be blocked by a rate limit
+  anvil-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: "read"
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly-8e47a24a36283247c57fd735d1e6db961ca5efc1
+      - name: Build ir profile
+        run: FOUNDRY_PROFILE=ir forge build
+      - name: Deploy on two local chains
+        run: ./script/anvil/anvil.sh
+
+  spelling:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Run codespell
+        uses: codespell-project/actions-codespell@v2
+        with:
+          skip: ./docs
+          ignore_words_list: embrio,exactin,fof
+
+
+  check-benchmarks:
+    # Only PRs into main: on a PR between two feature branches `src/` reaches main through the second PR,
+    # which meters it. Skipped rather than spent, being the most expensive job in the file
+    if: github.event_name == 'push' || github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      # Only when the change can move the metered gas. The paths are EndToEnd's import closure (the
+      # contracts it measures and the deployer that builds them), src-ir (FullDeployer deploys
+      # OnchainPMFactory from out-ir), the toolchain and the scripts that turn the gas into GasService.
+      # A base that is not in the history (a new branch, a force push) runs it
+      - name: Check benchmark inputs
+        id: inputs
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CHANGED="$(git diff --name-only "$BASE...HEAD" -- \
+            src src-ir test/integration test/utils test/hooks/mocks test/vaults/utils \
+            script/deploy script/utils script/checks/benchmarks.sh script/checks/update_gas_service_values.py \
+            lib foundry.toml foundry.lock remappings.txt .github/workflows/ci.yml)"
+          echo "${CHANGED:-no benchmark inputs changed}"
+          echo "changed=$([ -n "$CHANGED" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Foundry
+        if: steps.inputs.outputs.changed == 'true'
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Must stay pinned: GasService constants are gas-exact and regenerated locally via
+          # `benchmarks.sh apply`. A floating version meters gas differently than contributors'
+          # toolchain, making the check demand values nobody can reproduce.
+          version: nightly-8e47a24a36283247c57fd735d1e6db961ca5efc1
+
+      - name: Setup Python
+        if: steps.inputs.outputs.changed == 'true'
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+
+      - name: Build ir profile
+        if: steps.inputs.outputs.changed == 'true'
+        run: FOUNDRY_PROFILE=ir forge build
+
+      - name: Run benchmarks check
+        if: steps.inputs.outputs.changed == 'true'
+        run: ./script/checks/benchmarks.sh check
+        env:
+          FOUNDRY_PROFILE: ci
+
+  claude-md-tree:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+
+      - name: Check CLAUDE.md directory tree
+        run: python3 script/checks/check_claude_tree.py
+
+  ward-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+
+      - name: Check ward coverage
+        run: python3 script/checks/check_ward_coverage.py
+

@@ -1,0 +1,2215 @@
+[
+  {
+    "id": "scope-manifest",
+    "path": "context/scope.json",
+    "dimensions": [
+      "scope"
+    ],
+    "description": "Pinned repository identity, revision and selected file list.",
+    "written_for_engagement": false,
+    "level": "engagement",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/scope.json",
+        "location": "codebases[0]; complete manifest"
+      }
+    ]
+  },
+  {
+    "id": "engagement-statements",
+    "path": "context/statements.json",
+    "dimensions": [
+      "tf",
+      "scope",
+      "known"
+    ],
+    "description": "Statement quotes, identifiers, source lines and per-dimension levels.",
+    "written_for_engagement": true,
+    "level": "engagement",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/statements.json",
+        "location": "version; files[*].statements[*]"
+      }
+    ]
+  },
+  {
+    "id": "judging-guidelines",
+    "path": "context/judging-guidelines.md",
+    "dimensions": [
+      "tf",
+      "scope",
+      "known",
+      "severity"
+    ],
+    "description": "Selected Sherlock judging guidelines, duplication rules and submission mechanics.",
+    "written_for_engagement": false,
+    "level": "platform",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/judging-guidelines.md",
+        "location": "Lines 1–201"
+      }
+    ]
+  },
+  {
+    "id": "severity-set",
+    "path": "context/severity-set.json",
+    "dimensions": [
+      "severity"
+    ],
+    "description": "Ordered severity identifiers and definitions, with the supplied severity document.",
+    "written_for_engagement": false,
+    "level": "platform",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/severity-set.json",
+        "location": "Complete array, Critical through Info"
+      },
+      {
+        "path": "context/severities.md",
+        "location": "Lines 1–31"
+      }
+    ]
+  },
+  {
+    "id": "supplied-severity-document",
+    "path": "context/severities.md",
+    "dimensions": [
+      "severity"
+    ],
+    "description": "Supplied severity definitions with abbreviation and payout-weight metadata.",
+    "written_for_engagement": false,
+    "level": "platform",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/severities.md",
+        "location": "Lines 1–31"
+      }
+    ]
+  },
+  {
+    "id": "finding-report-standard",
+    "path": "context/finding-report-standard.md",
+    "dimensions": [],
+    "description": "Platform guidance for the fields of a finding report.",
+    "written_for_engagement": false,
+    "level": "platform",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/finding-report-standard.md",
+        "location": "Lines 1–99"
+      }
+    ]
+  },
+  {
+    "id": "scope-rule-centrifuge__protocol-internal",
+    "path": "context/scope-rules/centrifuge__protocol-internal.md",
+    "dimensions": [
+      "scope"
+    ],
+    "description": "Sherlock file-list scope rule for centrifuge__protocol-internal.",
+    "written_for_engagement": false,
+    "level": "platform",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/scope-rules/centrifuge__protocol-internal.md",
+        "location": "Lines 1–1"
+      }
+    ]
+  },
+  {
+    "id": "attachment-01",
+    "path": "context/Centrifuge_vdk_context_docs_final.md",
+    "dimensions": [
+      "tf",
+      "scope",
+      "known"
+    ],
+    "description": "VDK engagement overview, components, environment, trust model, disclosures and build instructions.",
+    "written_for_engagement": true,
+    "level": "engagement",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/Centrifuge_vdk_context_docs_final.md",
+        "location": "Lines 1–525"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=context/Centrifuge_vdk_context_docs_final.md]; Statements S1–S118"
+      }
+    ],
+    "provenance": "uploaded"
+  },
+  {
+    "id": "attachment-02",
+    "path": "context/SPECIFICATION.md",
+    "dimensions": [
+      "tf",
+      "scope",
+      "known"
+    ],
+    "description": "VDK property tables, guarantees, non-guarantees, deployment assumptions and test references.",
+    "written_for_engagement": true,
+    "level": "engagement",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/SPECIFICATION.md",
+        "location": "Lines 1–656"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=context/SPECIFICATION.md]; Statements S119–S362"
+      }
+    ],
+    "provenance": "uploaded"
+  },
+  {
+    "id": "attachment-03",
+    "path": "context/centrifuge-protocol-internal__docs-audits-2023-09-Code4rena.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "Code4rena liquidity-pools report with findings, responses and audit analysis.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/centrifuge-protocol-internal__docs-audits-2023-09-Code4rena.md",
+        "location": "Lines 1–1632"
+      },
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2023-09-Code4rena.md",
+        "location": "Lines 1–1630"
+      }
+    ],
+    "provenance": "repository_scan"
+  },
+  {
+    "id": "attachment-04",
+    "path": "context/centrifuge-protocol-internal__docs-audits-out-of-scope-cantina-bug-bounty.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Protocol-wide Cantina bounty disclosure list for the deployed v3.3.0 code.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/centrifuge-protocol-internal__docs-audits-out-of-scope-cantina-bug-bounty.md",
+        "location": "Lines 1–152"
+      },
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/out-of-scope/cantina-bug-bounty.md",
+        "location": "Lines 1–150"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/docs/audits/out-of-scope/cantina-bug-bounty.md]; Statements S608–S745"
+      }
+    ],
+    "provenance": "repository_scan"
+  },
+  {
+    "id": "attachment-05",
+    "path": "context/centrifuge-protocol-internal__docs-audits-out-of-scope-README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "Repository description of the bounty disclosure-list lifecycle.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/centrifuge-protocol-internal__docs-audits-out-of-scope-README.md",
+        "location": "Lines 1–11"
+      },
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/out-of-scope/README.md",
+        "location": "Lines 1–9"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/docs/audits/out-of-scope/README.md]; Statements S606, S607"
+      }
+    ],
+    "provenance": "repository_scan"
+  },
+  {
+    "id": "attachment-06",
+    "path": "context/centrifuge-protocol-internal__docs-audits-out-of-scope-vdk.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "VDK disclosure list, trust assumptions, exceptions and specific items.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/centrifuge-protocol-internal__docs-audits-out-of-scope-vdk.md",
+        "location": "Lines 1–118"
+      },
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/out-of-scope/vdk.md",
+        "location": "Lines 1–116"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/docs/audits/out-of-scope/vdk.md]; Statements S746–S801"
+      }
+    ],
+    "provenance": "repository_scan"
+  },
+  {
+    "id": "repo-document-03",
+    "path": "centrifuge__protocol-internal/src/token/hooks/HookPolicies.sol",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "HookPolicies.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/token/hooks/HookPolicies.sol",
+        "location": "Lines 10–19, 39"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/token/hooks/HookPolicies.sol]; Statements S363, S364"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-04",
+    "path": "centrifuge__protocol-internal/src/token/hooks/ShareTokenHook.sol",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "ShareTokenHook.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/token/hooks/ShareTokenHook.sol",
+        "location": "Lines 260–264"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/token/hooks/ShareTokenHook.sol]; Statements S365"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-05",
+    "path": "centrifuge__protocol-internal/src/vaults/Vault.sol",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "Vault.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/Vault.sol",
+        "location": "Lines 229–231, 772–773, 935, 1133, 1349–1353"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/Vault.sol]; Statements S366–S370"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-06",
+    "path": "centrifuge__protocol-internal/src/vaults/factories/VaultFactory.sol",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "VaultFactory.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/factories/VaultFactory.sol",
+        "location": "Lines 50"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/factories/VaultFactory.sol]; Statements S371"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-07",
+    "path": "centrifuge__protocol-internal/src/vaults/hub/FeeRequestManager.sol",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "FeeRequestManager.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/hub/FeeRequestManager.sol",
+        "location": "Lines 84, 138–139"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/hub/FeeRequestManager.sol]; Statements S372, S373"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-08",
+    "path": "centrifuge__protocol-internal/src/vaults/hub/OrderBook.sol",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "OrderBook.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/hub/OrderBook.sol",
+        "location": "Lines 92, 124–125"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/hub/OrderBook.sol]; Statements S374, S375"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-09",
+    "path": "centrifuge__protocol-internal/src/vaults/libraries/BucketLib.sol",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "BucketLib.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/libraries/BucketLib.sol",
+        "location": "Lines 448"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/libraries/BucketLib.sol]; Statements S376"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-10",
+    "path": "centrifuge__protocol-internal/src/vaults/libraries/RoleCheckLib.sol",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "RoleCheckLib.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/libraries/RoleCheckLib.sol",
+        "location": "Lines 12"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/libraries/RoleCheckLib.sol]; Statements S377"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-11",
+    "path": "centrifuge__protocol-internal/src/vaults/libraries/VaultPricingLib.sol",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "VaultPricingLib.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/libraries/VaultPricingLib.sol",
+        "location": "Lines 40–43"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/libraries/VaultPricingLib.sol]; Statements S378"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-12",
+    "path": "centrifuge__protocol-internal/src/vaults/liquidity/BasinLiquidityRoute.sol",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "BasinLiquidityRoute.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/liquidity/BasinLiquidityRoute.sol",
+        "location": "Lines 115–116"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/liquidity/BasinLiquidityRoute.sol]; Statements S379"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-13",
+    "path": "centrifuge__protocol-internal/src/vaults/liquidity/VaultLiquidityRoute.sol",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "VaultLiquidityRoute.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/liquidity/VaultLiquidityRoute.sol",
+        "location": "Lines 23–29, 171, 239–241"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/liquidity/VaultLiquidityRoute.sol]; Statements S380, S381, S382"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-14",
+    "path": "centrifuge__protocol-internal/src/vaults/messaging/VaultRequestRouter.sol",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "VaultRequestRouter.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/messaging/VaultRequestRouter.sol",
+        "location": "Lines 134–135"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/messaging/VaultRequestRouter.sol]; Statements S383"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-15",
+    "path": "centrifuge__protocol-internal/src/vaults/oracles/SpokeOracle.sol",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "SpokeOracle.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/oracles/SpokeOracle.sol",
+        "location": "Lines 87"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/oracles/SpokeOracle.sol]; Statements S384"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-16",
+    "path": "centrifuge__protocol-internal/src/vaults/policies/RequestPolicies.sol",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "RequestPolicies.sol source with NatSpec or comments referenced by the statements file.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/policies/RequestPolicies.sol",
+        "location": "Lines 10–14"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/policies/RequestPolicies.sol]; Statements S385"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-17",
+    "path": "centrifuge__protocol-internal/.claude/prompts/async-lifecycle-review.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Repository review notes on asynchronous delivery and message lifecycle.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/.claude/prompts/async-lifecycle-review.md",
+        "location": "Lines 15–18, 33–36"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/.claude/prompts/async-lifecycle-review.md]; Statements S386, S387"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-18",
+    "path": "centrifuge__protocol-internal/.claude/prompts/integration-boundary-review.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Repository review notes on integration identity, authorization and batching context.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/.claude/prompts/integration-boundary-review.md",
+        "location": "Lines 12–14, 25–26, 49–53, 57–60"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/.claude/prompts/integration-boundary-review.md]; Statements S388, S389, S390, S391"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-19",
+    "path": "centrifuge__protocol-internal/.claude/prompts/pool-isolation-review.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Repository review notes on pool identity and isolation boundaries.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/.claude/prompts/pool-isolation-review.md",
+        "location": "Lines 17–18, 20–21, 66–71, 78–83, 119–121"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/.claude/prompts/pool-isolation-review.md]; Statements S392–S396"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-20",
+    "path": "centrifuge__protocol-internal/.claude/prompts/share-custody-review.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Repository review notes on share custody, hooks and transfer paths.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/.claude/prompts/share-custody-review.md",
+        "location": "Lines 16–22, 36–40, 48–50, 51–52, 53–54, 83–84"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/.claude/prompts/share-custody-review.md]; Statements S397–S402"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-21",
+    "path": "centrifuge__protocol-internal/.claude/rules/coding-style.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Repository coding conventions, inheritance and external-call patterns.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/.claude/rules/coding-style.md",
+        "location": "Lines 13, 14, 21, 22, 26"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/.claude/rules/coding-style.md]; Statements S403–S407"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-22",
+    "path": "centrifuge__protocol-internal/.claude/rules/comments.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "Repository conventions for comments and documentation.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/.claude/rules/comments.md",
+        "location": "Lines 15, 17, 18"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/.claude/rules/comments.md]; Statements S408, S409, S410"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-23",
+    "path": "centrifuge__protocol-internal/.claude/rules/deployment.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Repository deployment conventions and operational assumptions.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/.claude/rules/deployment.md",
+        "location": "Lines 14, 15, 19–20, 35, 36, 57, 65, 73, 85, 91, 102"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/.claude/rules/deployment.md]; Statements S411–S421"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-24",
+    "path": "centrifuge__protocol-internal/.claude/rules/formal-verification.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Repository notes on formal-verification coverage and model assumptions.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/.claude/rules/formal-verification.md",
+        "location": "Lines 23, 31"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/.claude/rules/formal-verification.md]; Statements S422, S423"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-25",
+    "path": "centrifuge__protocol-internal/CLAUDE.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Repository development guide, trust conventions and indexer notes.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/CLAUDE.md",
+        "location": "Lines 129, 138, 154, 157, 219, 220, 221"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/CLAUDE.md]; Statements S424–S430"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-26",
+    "path": "centrifuge__protocol-internal/docs/SPECIFICATION.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Protocol-wide core property tables and documented non-guarantees.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/SPECIFICATION.md",
+        "location": "Lines 13–444; see individual statement locations"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/docs/SPECIFICATION.md]; Statements S431–S605"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-30",
+    "path": "centrifuge__protocol-internal/docs/vaults-policies.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Fund-mechanics and plugin-design reference with policy examples.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/vaults-policies.md",
+        "location": "Lines 44–608; see individual statement locations"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/docs/vaults-policies.md]; Statements S802–S932"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-31",
+    "path": "centrifuge__protocol-internal/env/README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "Repository environment configuration and path-resolution reference.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/env/README.md",
+        "location": "Lines 32–41, 121"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/env/README.md]; Statements S933, S934"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-32",
+    "path": "centrifuge__protocol-internal/env/spell/006_migration_v3.1/README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "v3.1 migration spell reference and component wiring.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/env/spell/006_migration_v3.1/README.md",
+        "location": "Lines 65, 66, 67, 80, 89, 90, 92"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/env/spell/006_migration_v3.1/README.md]; Statements S935–S941"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-33",
+    "path": "centrifuge__protocol-internal/script/anvil/README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "Local deployment and fixture documentation.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/script/anvil/README.md",
+        "location": "Lines 44–48"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/script/anvil/README.md]; Statements S942"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-34",
+    "path": "centrifuge__protocol-internal/script/checks/README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "Repository check commands and their coverage.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/script/checks/README.md",
+        "location": "Lines 3–5, 14, 29–32"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/script/checks/README.md]; Statements S943, S944, S945"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-35",
+    "path": "centrifuge__protocol-internal/script/checks/fix_imports.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Import-normalization tool usage and limitations.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/script/checks/fix_imports.md",
+        "location": "Lines 17, 55, 95, 96, 98, 100, 326, 334, 339, 343, 344, 345"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/script/checks/fix_imports.md]; Statements S946–S957"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-36",
+    "path": "centrifuge__protocol-internal/script/deploy/README.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Deployment command, commitment, configuration and recovery reference.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/script/deploy/README.md",
+        "location": "Lines 3–584; see individual statement locations"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/script/deploy/README.md]; Statements S958–S988"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-37",
+    "path": "centrifuge__protocol-internal/script/testnet/README.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Testnet pool and environment setup reference.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/script/testnet/README.md",
+        "location": "Lines 5–8"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/script/testnet/README.md]; Statements S989"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-38",
+    "path": "centrifuge__protocol-internal/src/adapters/README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "Cross-chain adapter architecture reference.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/adapters/README.md",
+        "location": "Lines 9"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/adapters/README.md]; Statements S990"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-39",
+    "path": "centrifuge__protocol-internal/src/admin/README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "Root, guardian and administrative-contract architecture reference.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/admin/README.md",
+        "location": "Lines 13, 17"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/admin/README.md]; Statements S991, S992"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-40",
+    "path": "centrifuge__protocol-internal/src/bridge/README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "TokenBridge architecture and relayer-flow reference.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/bridge/README.md",
+        "location": "Lines 9"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/bridge/README.md]; Statements S993"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-41",
+    "path": "centrifuge__protocol-internal/src/core/README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "Core hub, spoke and messaging architecture reference.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/core/README.md",
+        "location": "Lines 3, 23, 35, 55"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/core/README.md]; Statements S994, S995, S996, S997"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-42",
+    "path": "centrifuge__protocol-internal/src/hooks/README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "Accounting and bridge hook architecture reference.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/hooks/README.md",
+        "location": "Lines 3"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/hooks/README.md]; Statements S998"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-43",
+    "path": "centrifuge__protocol-internal/src/managers/spoke/README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "Spoke-manager architecture and permission reference.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/managers/spoke/README.md",
+        "location": "Lines 13"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/managers/spoke/README.md]; Statements S999"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-44",
+    "path": "centrifuge__protocol-internal/src/token/hooks/README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "Share-token hook roles, presets, exemptions and extension reference.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/token/hooks/README.md",
+        "location": "Lines 20, 21, 25, 35, 41, 59"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/token/hooks/README.md]; Statements S1000–S1005"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-45",
+    "path": "centrifuge__protocol-internal/src/valuations/README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "Valuation-contract architecture reference.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/valuations/README.md",
+        "location": "Lines 11"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/valuations/README.md]; Statements S1006"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-46",
+    "path": "centrifuge__protocol-internal/src/vaults/ARCHITECTURE.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "VDK architecture diagrams and explanations of settlement, liquidity and deployment.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/ARCHITECTURE.md",
+        "location": "Lines 41, 42, 43, 44, 45, 129, 164, 200, 203"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/ARCHITECTURE.md]; Statements S1007–S1015"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-47",
+    "path": "centrifuge__protocol-internal/src/vaults/README.md",
+    "dimensions": [
+      "tf"
+    ],
+    "description": "VDK design, plugin interfaces and extension reference.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/README.md",
+        "location": "Lines 25, 29, 38, 40"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/README.md]; Statements S1016, S1017, S1018, S1019"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-48",
+    "path": "centrifuge__protocol-internal/src/vaults/SPECIFICATION.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Repository VDK behavioral property tables and test references.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/src/vaults/SPECIFICATION.md",
+        "location": "Lines 26–654; see individual statement locations"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/src/vaults/SPECIFICATION.md]; Statements S1020–S1237"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-49",
+    "path": "centrifuge__protocol-internal/test/integration/recon-end-to-end/README.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "End-to-end invariant harness reference and documented assumptions.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/test/integration/recon-end-to-end/README.md",
+        "location": "Lines 44–49, 50–51, 134–135, 136–137, 138, 139–140, 141–142, 143–145, 146–148"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/test/integration/recon-end-to-end/README.md]; Statements S1238–S1246"
+      }
+    ]
+  },
+  {
+    "id": "repo-document-50",
+    "path": "centrifuge__protocol-internal/test/integration/recon-messaging/README.md",
+    "dimensions": [
+      "tf",
+      "known"
+    ],
+    "description": "Messaging invariant harness, replay properties and coverage limitations.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/test/integration/recon-messaging/README.md",
+        "location": "Lines 19, 20, 25, 34, 45, 54, 66, 69, 95, 102, 110, 130, 132, 140, 142, 200, 214, 228, 229, 230, 231, 232, 233, 234, 235, 236, 244, 246, 247, 248, 250, 252, 253, 254, 255, 256, 257, 258, 259, 260"
+      },
+      {
+        "path": "context/statements.json",
+        "location": "files[path=centrifuge__protocol-internal/test/integration/recon-messaging/README.md]; Statements S1247–S1286"
+      }
+    ]
+  },
+  {
+    "id": "report-01",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2023-09-SRLabs.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2023-09-SRLabs report: Liquidity-pools pallets and cross-chain message processing.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2023-09-SRLabs.pdf",
+        "location": "PDF pages 1–5, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2023-09-SRLabs.md",
+        "location": "Lines 1–169"
+      }
+    ]
+  },
+  {
+    "id": "report-02",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2023-10-Cantina.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2023-10-Cantina report: LiquidityPool, PoolManager, tranche-token restrictions and request handling.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2023-10-Cantina.pdf",
+        "location": "PDF pages 1–14, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2023-10-Cantina.md",
+        "location": "Lines 1–693"
+      }
+    ]
+  },
+  {
+    "id": "report-03",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2024-08-Spearbit.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2024-08-Spearbit report: CentrifugeRouter, TransferProxy, adapters and tranche-token restrictions.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2024-08-Spearbit.pdf",
+        "location": "PDF pages 1–42, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2024-08-Spearbit.md",
+        "location": "Lines 1–2471"
+      }
+    ]
+  },
+  {
+    "id": "report-04",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-02-Cantina.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-02-Cantina report: ERC7540Vault claims, transfer restrictions and member data.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-02-Cantina.pdf",
+        "location": "PDF pages 1–8, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-02-Cantina.md",
+        "location": "Lines 1–330"
+      }
+    ]
+  },
+  {
+    "id": "report-05",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-03-xmxanuel.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-03-xmxanuel report: Protocol v3 requests, Gateway and accounting.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-03-xmxanuel.pdf",
+        "location": "PDF pages 1–9, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-03-xmxanuel.md",
+        "location": "Lines 1–362"
+      }
+    ]
+  },
+  {
+    "id": "report-06",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-04-Recon.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-04-Recon report: Protocol v3 accounting, vault requests, rounding and invariant analysis.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-04-Recon.pdf",
+        "location": "PDF pages 1–83, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-04-Recon.md",
+        "location": "Lines 1–3626"
+      }
+    ]
+  },
+  {
+    "id": "report-07",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-04-burraSec-1.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-04-burraSec-1 report: Gateway refunds, message gas and pause handling.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-04-burraSec-1.pdf",
+        "location": "PDF pages 1–9, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-04-burraSec-1.md",
+        "location": "Lines 1–302"
+      }
+    ]
+  },
+  {
+    "id": "report-08",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-04-burraSec-2.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-04-burraSec-2 report: Gateway reentrancy, underpaid messages and recovery.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-04-burraSec-2.pdf",
+        "location": "PDF pages 1–10, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-04-burraSec-2.md",
+        "location": "Lines 1–415"
+      }
+    ]
+  },
+  {
+    "id": "report-09",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-05-Cantina.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-05-Cantina report: AxelarAdapter, BytesLib, request handling and Gateway.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-05-Cantina.pdf",
+        "location": "PDF pages 1–10, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-05-Cantina.md",
+        "location": "Lines 1–513"
+      }
+    ]
+  },
+  {
+    "id": "report-10",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-05-burraSec.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-05-burraSec report: Deployer permissions and Hub dependencies.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-05-burraSec.pdf",
+        "location": "PDF pages 1–6, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-05-burraSec.md",
+        "location": "Lines 1–238"
+      }
+    ]
+  },
+  {
+    "id": "report-11",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-07-xmxanuel.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-07-xmxanuel report: Gateway recovery, BalanceSheet, ShareToken and queueing.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-07-xmxanuel.pdf",
+        "location": "PDF pages 1–12, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-07-xmxanuel.md",
+        "location": "Lines 1–539"
+      }
+    ]
+  },
+  {
+    "id": "report-12",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-07-yAudit.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-07-yAudit report: Legacy vaults, BalanceSheet snapshots, max views and transfer restrictions.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-07-yAudit.pdf",
+        "location": "PDF pages 1–25, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-07-yAudit.md",
+        "location": "Lines 1–1466"
+      }
+    ]
+  },
+  {
+    "id": "report-13",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-08-Cantina.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-08-Cantina report: BalanceSheet batching, reentrancy, vault validation and deployment.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-08-Cantina.pdf",
+        "location": "PDF pages 1–14, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-08-Cantina.md",
+        "location": "Lines 1–790"
+      }
+    ]
+  },
+  {
+    "id": "report-14",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-08-burraSec.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-08-burraSec report: LayerZeroAdapter funding, message failure and configuration.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-08-burraSec.pdf",
+        "location": "PDF pages 1–9, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-08-burraSec.md",
+        "location": "Lines 1–375"
+      }
+    ]
+  },
+  {
+    "id": "report-15",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-09-burraSec.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-09-burraSec report: Subsidy spending, multicalls, adapter votes and message delivery.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-09-burraSec.pdf",
+        "location": "PDF pages 1–24, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-09-burraSec.md",
+        "location": "Lines 1–1215"
+      }
+    ]
+  },
+  {
+    "id": "report-16",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-10-burraSec.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-10-burraSec report: Pool identity checks, adapter payloads and message gas.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-10-burraSec.pdf",
+        "location": "PDF pages 1–19, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-10-burraSec.md",
+        "location": "Lines 1–833"
+      }
+    ]
+  },
+  {
+    "id": "report-17",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-10-yAudit.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-10-yAudit report: NAV accounting, SyncManager conversions and transfer hooks.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-10-yAudit.pdf",
+        "location": "PDF pages 1–13, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-10-yAudit.md",
+        "location": "Lines 1–681"
+      }
+    ]
+  },
+  {
+    "id": "report-18",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-12-Sherlock-Blackthorn.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-12-Sherlock-Blackthorn report: Pool isolation, globalEscrow, price accounting and message batching.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-12-Sherlock-Blackthorn.pdf",
+        "location": "PDF pages 1–112, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-12-Sherlock-Blackthorn.md",
+        "location": "Lines 1–4456"
+      }
+    ]
+  },
+  {
+    "id": "report-19",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-12-xmxanuel.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2025-12-xmxanuel report: BalanceSheet reentrancy, batching and governance permissions.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2025-12-xmxanuel.pdf",
+        "location": "PDF pages 1–8, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2025-12-xmxanuel.md",
+        "location": "Lines 1–274"
+      }
+    ]
+  },
+  {
+    "id": "report-20",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-01-yAudit.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-01-yAudit report: Escrow storage, deployment salts, subsidy events and documentation.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-01-yAudit.pdf",
+        "location": "PDF pages 1–11, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-01-yAudit.md",
+        "location": "Lines 1–570"
+      }
+    ]
+  },
+  {
+    "id": "report-21",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-02-Sherlock-deployment.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "Sherlock deployment check and verification report for the protocol contracts.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-02-Sherlock-deployment.pdf",
+        "location": "PDF pages 1–12, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-02-Sherlock-deployment.md",
+        "location": "Lines 1–440"
+      }
+    ]
+  },
+  {
+    "id": "report-22",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-03-xmxanuel-onchain-pm.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-03-xmxanuel-onchain-pm report: OnchainPM, Weiroll scripts and circuit-breaker/slippage guards.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-03-xmxanuel-onchain-pm.pdf",
+        "location": "PDF pages 1–8, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-03-xmxanuel-onchain-pm.md",
+        "location": "Lines 1–303"
+      }
+    ]
+  },
+  {
+    "id": "report-23",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-04-Sherlock-onchain-pm.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-04-Sherlock-onchain-pm report: SlippageGuard and CircuitBreakerGuard.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-04-Sherlock-onchain-pm.pdf",
+        "location": "PDF pages 1–14, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-04-Sherlock-onchain-pm.md",
+        "location": "Lines 1–619"
+      }
+    ]
+  },
+  {
+    "id": "report-24",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-04-burraSec-onchain-pm.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-04-burraSec-onchain-pm report: OnOffRamp, OnchainPM, SlippageGuard and script state.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-04-burraSec-onchain-pm.pdf",
+        "location": "PDF pages 1–19, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-04-burraSec-onchain-pm.md",
+        "location": "Lines 1–925"
+      }
+    ]
+  },
+  {
+    "id": "report-25",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-06-yAudit-v3.3.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-06-yAudit-v3.3 report: StdManifest, NAV and oracle updates, authorization and bridge rate limits.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-06-yAudit-v3.3.pdf",
+        "location": "PDF pages 1–13, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-06-yAudit-v3.3.md",
+        "location": "Lines 1–647"
+      }
+    ]
+  },
+  {
+    "id": "report-26",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-07-burraSec-bridge.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-07-burraSec-bridge report: TokenBridge relayer funding, refunds and share custody.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-07-burraSec-bridge.pdf",
+        "location": "PDF pages 1–8, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-07-burraSec-bridge.md",
+        "location": "Lines 1–327"
+      }
+    ]
+  },
+  {
+    "id": "report-27",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-07-burraSec-v3.3.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-07-burraSec-v3.3 report: Pool policies, adapter sessions, accounting sync and price updates.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-07-burraSec-v3.3.pdf",
+        "location": "PDF pages 1–33, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-07-burraSec-v3.3.md",
+        "location": "Lines 1–1493"
+      }
+    ]
+  },
+  {
+    "id": "report-28",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-08-FV.md",
+    "dimensions": [],
+    "description": "2026-08-FV report: Core hub, spoke and messaging verification properties and assumptions.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-08-FV.pdf",
+        "location": "PDF pages 1–85, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-08-FV.md",
+        "location": "Lines 1–5462"
+      }
+    ]
+  },
+  {
+    "id": "report-29",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-08-Sherlock.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-08-Sherlock report: Share-token identity, frozen claims, Supervisor and sync-vault views.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-08-Sherlock.pdf",
+        "location": "PDF pages 1–28, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-08-Sherlock.md",
+        "location": "Lines 1–1013"
+      }
+    ]
+  },
+  {
+    "id": "report-30",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-08-burraSec-ShareManager.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-08-burraSec-ShareManager report: ShareManager revocation, freezing, approval and events.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-08-burraSec-ShareManager.pdf",
+        "location": "PDF pages 1–7, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-08-burraSec-ShareManager.md",
+        "location": "Lines 1–222"
+      }
+    ]
+  },
+  {
+    "id": "report-31",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-08-burraSec-v3.3.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-08-burraSec-v3.3 report: Linked asset/liability repricing, vault registration and NAV initialization.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-08-burraSec-v3.3.pdf",
+        "location": "PDF pages 1–15, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-08-burraSec-v3.3.md",
+        "location": "Lines 1–608"
+      }
+    ]
+  },
+  {
+    "id": "report-32",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-09-FV.md",
+    "dimensions": [],
+    "description": "2026-09-FV report: Core hub, spoke and messaging verification properties and assumptions.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-09-FV.pdf",
+        "location": "PDF pages 1–116, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-09-FV.md",
+        "location": "Lines 1–7401"
+      }
+    ]
+  },
+  {
+    "id": "report-33",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-09-Sherlock.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-09-Sherlock report: Price timestamps and SimplePriceManager issuance overflow.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-09-Sherlock.pdf",
+        "location": "PDF pages 1–7, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-09-Sherlock.md",
+        "location": "Lines 1–217"
+      }
+    ]
+  },
+  {
+    "id": "report-34",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-09-burraSec.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-09-burraSec report: OpsGuardian and permissionless asset registration.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-09-burraSec.pdf",
+        "location": "PDF pages 1–6, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-09-burraSec.md",
+        "location": "Lines 1–180"
+      }
+    ]
+  },
+  {
+    "id": "report-35",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-Alex-Filippov.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-Alex-Filippov report: Adapter deduplication, escrow reservations, controller requests and gas.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-Alex-Filippov.pdf",
+        "location": "PDF pages 1–14, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-Alex-Filippov.md",
+        "location": "Lines 1–678"
+      }
+    ]
+  },
+  {
+    "id": "report-36",
+    "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-LonelySloth.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "2026-LonelySloth report: MultiAdapter negative-vote reset and message execution.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/docs/audits/2026-LonelySloth.pdf",
+        "location": "PDF pages 1–9, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/docs/audits/2026-LonelySloth.md",
+        "location": "Lines 1–440"
+      }
+    ]
+  },
+  {
+    "id": "report-37",
+    "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "Gnosis_Safe_Audit_Report security review report.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report.pdf",
+        "location": "PDF pages 1–7, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report.md",
+        "location": "Lines 1–388"
+      }
+    ]
+  },
+  {
+    "id": "report-38",
+    "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_1_0.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "Gnosis_Safe_Audit_Report_1_1_0 security review report.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_1_0.pdf",
+        "location": "PDF pages 1–5, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_1_0.md",
+        "location": "Lines 1–193"
+      }
+    ]
+  },
+  {
+    "id": "report-39",
+    "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_1_1.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "Gnosis_Safe_Audit_Report_1_1_1 security review report.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_1_1.pdf",
+        "location": "PDF pages 1–7, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_1_1.md",
+        "location": "Lines 1–265"
+      }
+    ]
+  },
+  {
+    "id": "report-40",
+    "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_2_0.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "Gnosis_Safe_Audit_Report_1_2_0 security review report.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_2_0.pdf",
+        "location": "PDF pages 1–3, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_2_0.md",
+        "location": "Lines 1–68"
+      }
+    ]
+  },
+  {
+    "id": "report-41",
+    "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_3_0_Final.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "Gnosis_Safe_Audit_Report_1_3_0_Final security review report.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_3_0_Final.pdf",
+        "location": "PDF pages 1–3, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_3_0_Final.md",
+        "location": "Lines 1–51"
+      }
+    ]
+  },
+  {
+    "id": "report-42",
+    "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_3_0_Initial.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "Gnosis_Safe_Audit_Report_1_3_0_Initial security review report.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_3_0_Initial.pdf",
+        "location": "PDF pages 1–3, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Audit_Report_1_3_0_Initial.md",
+        "location": "Lines 1–62"
+      }
+    ]
+  },
+  {
+    "id": "report-43",
+    "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Formal_Verification_Report_1_0_0.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "Gnosis Safe formal-verification report with proof assumptions and findings.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Formal_Verification_Report_1_0_0.pdf",
+        "location": "PDF pages 1–57, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Formal_Verification_Report_1_0_0.md",
+        "location": "Lines 1–2339"
+      }
+    ]
+  },
+  {
+    "id": "report-44",
+    "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Symbolic_Execution.md",
+    "dimensions": [],
+    "description": "Gnosis Safe symbolic-execution worksheets with stack-state traces.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Symbolic_Execution.pdf",
+        "location": "PDF pages 1–8, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Gnosis_Safe_Symbolic_Execution.md",
+        "location": "Lines 1–10423"
+      }
+    ]
+  },
+  {
+    "id": "report-45",
+    "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Safe_Audit_Report_1_4_0.md",
+    "dimensions": [
+      "known"
+    ],
+    "description": "Safe_Audit_Report_1_4_0 security review report.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Safe_Audit_Report_1_4_0.pdf",
+        "location": "PDF pages 1–46, including covers"
+      },
+      {
+        "path": "context/derived/centrifuge__protocol-internal/lib/safe-utils/lib/safe-smart-account/docs/Safe_Audit_Report_1_4_0.md",
+        "location": "Lines 1–1667"
+      }
+    ]
+  },
+  {
+    "id": "repository-overview",
+    "path": "centrifuge__protocol-internal/README.md",
+    "dimensions": [],
+    "description": "Protocol overview, architecture and general development links.",
+    "written_for_engagement": false,
+    "level": "repo",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "centrifuge__protocol-internal/README.md",
+        "location": "Lines 1–71"
+      }
+    ]
+  },
+  {
+    "id": "deduplication-guidelines",
+    "path": "context/deduplication-guidelines.md",
+    "dimensions": [],
+    "description": "Source-referenced duplication instructions and links to severity definitions.",
+    "written_for_engagement": false,
+    "level": "platform",
+    "visibility": "participants",
+    "sources": [
+      {
+        "path": "context/judging-guidelines.md",
+        "location": "§4 Duplication guidelines; §5.10 Best practices; §6 Glossary"
+      },
+      {
+        "path": "context/severity-set.json",
+        "location": "Low definition, severity-def:low-v7"
+      }
+    ]
+  }
+]

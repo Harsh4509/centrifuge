@@ -1,0 +1,1109 @@
+// SPDX-License-Identifier: BUSL-1.1
+pragma solidity 0.8.28;
+
+import {GatedDeployer, DeployPhase} from "./GatedDeployer.s.sol";
+
+import {Hub} from "../../src/core/hub/Hub.sol";
+import {Envoy} from "../../src/core/utils/Envoy.sol";
+import {Spoke} from "../../src/core/spoke/Spoke.sol";
+import {Holdings} from "../../src/core/hub/Holdings.sol";
+import {Accounting} from "../../src/core/hub/Accounting.sol";
+import {Gateway} from "../../src/core/messaging/Gateway.sol";
+import {HubHandler} from "../../src/core/hub/HubHandler.sol";
+import {HubRegistry} from "../../src/core/hub/HubRegistry.sol";
+import {SpokeHandler} from "../../src/core/spoke/SpokeHandler.sol";
+import {SnapshotQueue} from "../../src/core/spoke/SnapshotQueue.sol";
+import {SpokeRegistry} from "../../src/core/spoke/SpokeRegistry.sol";
+import {MultiAdapter} from "../../src/core/messaging/MultiAdapter.sol";
+import {ShareClassManager} from "../../src/core/hub/ShareClassManager.sol";
+import {EscrowFactory} from "../../src/core/spoke/factories/EscrowFactory.sol";
+import {MessageProcessor} from "../../src/core/messaging/MessageProcessor.sol";
+import {MessageDispatcher} from "../../src/core/messaging/MessageDispatcher.sol";
+
+import {VaultRequestRouter} from "../../src/vaults/messaging/VaultRequestRouter.sol";
+
+import {Root} from "../../src/admin/Root.sol";
+import {GasService} from "../../src/admin/GasService.sol";
+import {ISafe} from "../../src/admin/interfaces/ISafe.sol";
+import {OpsGuardian} from "../../src/admin/OpsGuardian.sol";
+import {ProtocolGuardian} from "../../src/admin/ProtocolGuardian.sol";
+
+import {HookPolicies} from "../../src/token/hooks/HookPolicies.sol";
+import {NAVManager} from "../../src/hooks/accounting/NAVManager.sol";
+import {ShareTokenHook} from "../../src/token/hooks/ShareTokenHook.sol";
+import {BridgeCircuitBreaker} from "../../src/hooks/bridge/BridgeCircuitBreaker.sol";
+import {SimplePriceManager} from "../../src/hooks/accounting/SimplePriceManager.sol";
+
+import {QueueManager} from "../../src/managers/spoke/QueueManager.sol";
+import {ShareManager} from "../../src/managers/spoke/ShareManager.sol";
+import {OnOffRampFactory} from "../../src/managers/spoke/OnOffRamp.sol";
+import {ScriptHelpers} from "../../src/managers/spoke/ScriptHelpers.sol";
+import {AccountingToken} from "../../src/managers/spoke/AccountingToken.sol";
+import {FlashLoanHelper} from "../../src/managers/spoke/FlashLoanHelper.sol";
+import {AdapterFailover} from "../../src/managers/adapters/AdapterFailover.sol";
+import {ApprovalGuard} from "../../src/managers/spoke/guards/ApprovalGuard.sol";
+import {SlippageGuard} from "../../src/managers/spoke/guards/SlippageGuard.sol";
+import {CircuitBreakerGuard} from "../../src/managers/spoke/guards/CircuitBreakerGuard.sol";
+import {IOnchainPMFactory} from "../../src/managers/spoke/interfaces/IOnchainPMFactory.sol";
+
+import {OracleValuation} from "../../src/valuations/OracleValuation.sol";
+import {IdentityValuation} from "../../src/valuations/IdentityValuation.sol";
+
+import {OrderBook} from "../../src/vaults/hub/OrderBook.sol";
+import {VaultRouter} from "../../src/vaults/VaultRouter.sol";
+import {SpokeOracle} from "../../src/vaults/oracles/SpokeOracle.sol";
+import {VaultFactory} from "../../src/vaults/factories/VaultFactory.sol";
+import {FeeRequestManager} from "../../src/vaults/hub/FeeRequestManager.sol";
+import {VaultLiquidityRoute} from "../../src/vaults/liquidity/VaultLiquidityRoute.sol";
+import {ReserveInstantPolicy} from "../../src/vaults/policies/ReserveInstantPolicy.sol";
+import {PerInvestorPolicy, PerPeriodPolicy, PerRequestPolicy} from "../../src/vaults/policies/RequestPolicies.sol";
+
+import {VmSafe} from "forge-std/Vm.sol";
+
+import {RootFixes} from "../../src/deployment/RootFixes.sol";
+import {TokenBridge} from "../../src/bridge/TokenBridge.sol";
+import {SubsidyManager} from "../../src/utils/SubsidyManager.sol";
+import {AxelarAdapter} from "../../src/adapters/AxelarAdapter.sol";
+import {StandbyAdapter} from "../../src/adapters/StandbyAdapter.sol";
+import {ChainlinkAdapter} from "../../src/adapters/ChainlinkAdapter.sol";
+import {HyperlaneAdapter} from "../../src/adapters/HyperlaneAdapter.sol";
+import {LayerZeroAdapter} from "../../src/adapters/LayerZeroAdapter.sol";
+import {RefundEscrowFactory} from "../../src/utils/RefundEscrowFactory.sol";
+import {ShareTokenRegistrar} from "../../src/token/ShareTokenRegistrar.sol";
+import {
+    CoreReport,
+    CoreActionBatcher,
+    NonCoreActionBatcher,
+    AdapterActionBatcher,
+    NonCoreReport,
+    AdaptersReport,
+    AdapterConnections,
+    AdapterSettings,
+    SetConfigParam
+} from "../../src/deployment/ActionBatchers.sol";
+
+struct AxelarInput {
+    bool shouldDeploy;
+    address gateway;
+    address gasService;
+}
+
+struct LayerZeroInput {
+    bool shouldDeploy;
+    address endpoint;
+    address delegate;
+    // Pre-computed LayerZero ULN config
+    // Should contain SetConfigParam[] for both send and receive libraries
+    // The order of this array must be the same as the connections
+    SetConfigParam[] configParams;
+}
+
+struct ChainlinkInput {
+    bool shouldDeploy;
+    address ccipRouter;
+}
+
+struct HyperlaneInput {
+    bool shouldDeploy;
+    address mailbox;
+    address ism;
+}
+
+struct AdaptersInput {
+    LayerZeroInput layerZero;
+    AxelarInput axelar;
+    ChainlinkInput chainlink;
+    HyperlaneInput hyperlane;
+    AdapterConnections[] connections;
+}
+
+struct DeployerInput {
+    uint16 centrifugeId;
+    string deploymentId;
+    uint8[32] txLimits;
+    ISafe protocolSafe;
+    ISafe opsSafe;
+    // Both reach init code, so both have to come out the same in either gate phase. `delay` is what a fresh
+    // Root is deployed with, and is ignored where one is kept
+    address root;
+    uint256 delay;
+    // The spoke half of the Vault Development Kit, which needs EIP-7907
+    bool vaults;
+    AdaptersInput adapters;
+}
+
+contract FullDeployer is GatedDeployer {
+    /// @dev The canonical `SpokeOracle` bounds both the age of each price and the gap between the pair. With
+    ///      `maxSkew` equal to `maxAge` the gap bound adds nothing: two prices each within a day of now are within a
+    ///      day of each other, so the pair is held to `maxAge` alone. Only the instant lane and the previews read it checked, and an instant lane needs a freshness
+    ///      bound, so the shared default is the bounded one. A pool notifying less often than daily that
+    ///      still wants an instant lane deploys an oracle of its own, as it would for any other bound.
+    uint64 internal constant SPOKE_ORACLE_MAX_AGE = 1 days;
+    uint64 internal constant SPOKE_ORACLE_MAX_SKEW = 1 days;
+
+    /// @dev The canonical batching window: daily, closing at 00:00 UTC, which is the "24 hours or more"
+    ///      the open-access shape asks for. A pool wanting another cutoff deploys its own instance.
+    uint64 internal constant PER_PERIOD_WINDOW = 1 days;
+    uint64 internal constant PER_PERIOD_OFFSET = 0;
+    uint64 internal constant PER_PERIOD_DEPOSIT_NOTICE = 0;
+    uint64 internal constant PER_PERIOD_REDEEM_NOTICE = 0;
+
+    Root public root;
+    ProtocolGuardian public protocolGuardian;
+    OpsGuardian public opsGuardian;
+    GasService public gasService;
+
+    Gateway public gateway;
+    MultiAdapter public multiAdapter;
+
+    MessageProcessor public messageProcessor;
+    MessageDispatcher public messageDispatcher;
+
+    Spoke public spoke;
+    SnapshotQueue public snapshotQueue;
+    ShareTokenRegistrar public shareTokenRegistrar;
+    SpokeRegistry public spokeRegistry;
+    SpokeHandler public spokeHandler;
+    Envoy public envoy;
+    EscrowFactory public escrowFactory;
+
+    HubRegistry public hubRegistry;
+    Accounting public accounting;
+    Holdings public holdings;
+    ShareClassManager public shareClassManager;
+    HubHandler public hubHandler;
+    Hub public hub;
+
+    SubsidyManager public subsidyManager;
+    RefundEscrowFactory public refundEscrowFactory;
+
+    TokenBridge public tokenBridge;
+    BridgeCircuitBreaker public bridgeCircuitBreaker;
+
+    ShareTokenHook public freezeOnlyHook;
+    ShareTokenHook public fullRestrictionsHook;
+    ShareTokenHook public freelyTransferableHook;
+    ShareTokenHook public redemptionRestrictionsHook;
+
+    QueueManager public queueManager;
+    AdapterFailover public adapterFailover;
+    AccountingToken public accountingToken;
+    ScriptHelpers public scriptHelpers;
+    FlashLoanHelper public flashLoanHelper;
+    IOnchainPMFactory public onchainPMFactory;
+    OnOffRampFactory public onOffRampFactory;
+    ShareManager public shareManager;
+    ApprovalGuard public approvalGuard;
+    CircuitBreakerGuard public circuitBreakerGuard;
+    SlippageGuard public slippageGuard;
+
+    IdentityValuation public identityValuation;
+    OracleValuation public oracleValuation;
+
+    NAVManager public navManager;
+    SimplePriceManager public simplePriceManager;
+
+    VaultFactory public vaultFactory;
+    VaultRequestRouter public vaultRequestRouter;
+    VaultRouter public vaultRouter;
+    OrderBook public orderBook;
+    FeeRequestManager public feeRequestManager;
+    SpokeOracle public spokeOracle;
+    PerRequestPolicy public perRequestPolicy;
+    PerRequestPolicy public transferablePerRequestPolicy;
+    PerInvestorPolicy public perInvestorPolicy;
+    PerPeriodPolicy public perPeriodPolicy;
+    ReserveInstantPolicy public reserveInstantPolicy;
+    VaultLiquidityRoute public vaultLiquidityRoute;
+
+    ChainlinkAdapter chainlinkAdapter;
+    AxelarAdapter axelarAdapter;
+    LayerZeroAdapter layerZeroAdapter;
+    HyperlaneAdapter hyperlaneAdapter;
+
+    // One standby per bridge, each over a dedicated instance of it, in no global adapter set
+    StandbyAdapter layerZeroStandby;
+    StandbyAdapter axelarStandby;
+    StandbyAdapter chainlinkStandby;
+    StandbyAdapter hyperlaneStandby;
+
+    RootFixes public rootFixes;
+
+    CoreActionBatcher public coreBatcher;
+    NonCoreActionBatcher public nonCoreBatcher;
+    AdapterActionBatcher[] public adapterBatchers;
+
+    /// @dev Runs both phases back to back, in one process. For tests only: a real deployment gives each phase
+    ///      its own run, which is what proves the deploy phase rebuilds exactly what the commit phase committed.
+    ///      FullDeploymentPhasedTest is what covers the phases apart.
+    function deployFullBothPhases(DeployerInput memory input, address namespace_, address[] memory executors_) public {
+        deployFull(input, DeployPhase.Commit, namespace_, executors_);
+        deployFull(input, DeployPhase.Deploy, namespace_, executors_);
+    }
+
+    /// @dev Deploys every contract through a DeployGate, so that the admin signs a single transaction whatever
+    ///      the number of contracts. NOTE: this changes every deployed address, since a CREATE3 address
+    ///      derives from the CreateX caller.
+    ///      The phase acts as `msg.sender` — committing, the namespace or a delegate of it, a key or a Safe;
+    ///      deploying, an executor — so who that is belongs to the caller: see `GatedDeployer._initGated`.
+    function deployFull(DeployerInput memory input, DeployPhase phase, address namespace_, address[] memory executors_)
+        public
+    {
+        _initGated(input.deploymentId, phase, namespace_, executors_);
+
+        // Committing deploys the whole protocol locally and rolls it back: see `_startCommitWalk`
+        if (phase == DeployPhase.Commit) {
+            (uint256 snapshot, bool bracketed) = _startCommitWalk();
+            _deployProtocol(input);
+            _endCommitWalk(snapshot, bracketed);
+        } else {
+            _deployProtocol(input);
+
+            // NOTE. Coverage compiles without optimizations.
+            // This means that the gas costs are higher than the calibrated gasService limits,
+            // causing message processing to silently fail (e.g. Escrow creation via CREATE).
+            // We mock messageProcessingGasLimit with a higher value large enough for unoptimized code.
+            if (vm.isContext(VmSafe.ForgeContext.Coverage)) {
+                vm.mockCall(
+                    address(gasService),
+                    abi.encodeWithSelector(GasService.messageProcessingGasLimit.selector),
+                    abi.encode(uint128(30_000_000))
+                );
+            }
+        }
+    }
+
+    /// @dev Committing deploys the walk locally, at the addresses it will really occupy, since only running
+    ///      the init code reveals the runtime code to commit to, and constructors that wire their
+    ///      dependencies need to find them. That is then rolled back, to leave the addresses free for the
+    ///      executor: the commitment is carried across in memory, which a rollback does not touch.
+    ///
+    ///      Everything the walk put in storage does go, this script's own included, which is what keeps the
+    ///      addresses it registered out of the deployment manifest: only the deploy phase reports any.
+    function _startCommitWalk() internal returns (uint256 snapshot, bool bracketed) {
+        bracketed = vm.isContext(VmSafe.ForgeContext.ScriptGroup) && !proposing;
+        if (bracketed) vm.stopBroadcast();
+
+        snapshot = vm.snapshotState();
+    }
+
+    function _endCommitWalk(uint256 snapshot, bool bracketed) internal {
+        (bytes32[] memory salts, bytes32[] memory initCodeHashes) = _queuedCommitment();
+
+        // Carried across the rollback in memory, as the commitment is, so that a validating run can still
+        // name the one address it leaves work behind at
+        address rootFixes_ = address(rootFixes);
+        vm.revertToState(snapshot);
+        rootFixes = RootFixes(rootFixes_);
+
+        if (bracketed) vm.startBroadcast();
+
+        _commit(salts, initCodeHashes);
+    }
+
+    /// @dev One walk of the whole protocol. Deploys through the DeployGate, or locally when probing.
+    function _deployProtocol(DeployerInput memory input) internal {
+        address coreBatcherAddr = gatedAddress("coreBatcher", V_LATEST);
+        address nonCoreBatcherAddr = gatedAddress("nonCoreBatcher", V_LATEST);
+        address adapterBatcherAddr = gatedAddress(_adapterBatcherName(0), V_LATEST);
+
+        _deployCore(coreBatcherAddr, input);
+        coreBatcher = CoreActionBatcher(
+            submitUnreported(
+                "coreBatcher",
+                V_LATEST,
+                abi.encodePacked(
+                    type(CoreActionBatcher).creationCode,
+                    abi.encode(
+                        coreReport(),
+                        input.protocolSafe,
+                        input.opsSafe,
+                        adapterBatcherAddr,
+                        nonCoreBatcherAddr,
+                        input.root == address(0)
+                    )
+                )
+            )
+        );
+
+        _deployNonCore(nonCoreBatcherAddr, input);
+        nonCoreBatcher = NonCoreActionBatcher(
+            submitUnreported(
+                "nonCoreBatcher",
+                V_LATEST,
+                abi.encodePacked(
+                    type(NonCoreActionBatcher).creationCode, abi.encode(nonCoreReport(), input.root == address(0))
+                )
+            )
+        );
+
+        _deployAdapters(adapterBatcherAddr, input.adapters);
+
+        // One per lane, so that no transaction of the walk grows with the number of lanes
+        uint256 batcherCount = input.adapters.connections.length > 0 ? input.adapters.connections.length : 1;
+        delete adapterBatchers;
+        for (uint256 i; i < batcherCount; i++) {
+            address next = i + 1 < batcherCount ? gatedAddress(_adapterBatcherName(i + 1), V_LATEST) : address(0);
+            adapterBatchers.push(
+                AdapterActionBatcher(
+                    submitUnreported(_adapterBatcherName(i), V_LATEST, _adapterBatcherInitCode(input, i, next))
+                )
+            );
+        }
+
+        if (input.root != address(0)) {
+            rootFixes = RootFixes(
+                submitUnreported(
+                    "rootFixes", V_LATEST, abi.encodePacked(type(RootFixes).creationCode, abi.encode(nonCoreReport()))
+                )
+            );
+        }
+    }
+
+    function _adapterBatcherName(uint256 index) internal pure returns (string memory) {
+        return string.concat("adapterBatcher", vm.toString(index));
+    }
+
+    /// @dev A chain without lanes still gets one batcher, which wires nothing and only hands the adapters over
+    function _adapterBatcherInitCode(DeployerInput memory input, uint256 index, address next)
+        internal
+        view
+        returns (bytes memory)
+    {
+        bool hasLane = index < input.adapters.connections.length;
+        bool hasConfig = hasLane && index < input.adapters.layerZero.configParams.length;
+
+        AdapterConnections[] memory lane = new AdapterConnections[](hasLane ? 1 : 0);
+        SetConfigParam[] memory config = new SetConfigParam[](hasConfig ? 1 : 0);
+        if (hasLane) lane[0] = input.adapters.connections[index];
+        if (hasConfig) config[0] = input.adapters.layerZero.configParams[index];
+
+        return abi.encodePacked(
+            type(AdapterActionBatcher).creationCode,
+            abi.encode(
+                adaptersReport(),
+                AdapterSettings({
+                    protocolSafe: input.protocolSafe,
+                    layerZeroDelegate: input.adapters.layerZero.delegate,
+                    remoteAxelarAdapter: vm.toString(address(axelarAdapter)),
+                    remoteAxelarStandby: address(axelarStandby) != address(0)
+                        ? vm.toString(address(axelarStandby.underlying()))
+                        : "",
+                    hyperlaneIsm: input.adapters.hyperlane.ism
+                }),
+                lane,
+                config,
+                index == 0,
+                next
+            )
+        );
+    }
+
+    function _deployCore(address batcher, DeployerInput memory input) internal {
+        address tokenBridgeAddr = gatedAddress("tokenBridge", V3_3);
+
+        // Admin
+        root = input.root != address(0)
+            ? _existingRoot(input.root)
+            : Root(submit("root", V3_3, abi.encodePacked(type(Root).creationCode, abi.encode(input.delay, batcher))));
+
+        gasService = GasService(
+            submit(
+                "gasService",
+                V3_3,
+                abi.encodePacked(type(GasService).creationCode, abi.encode(input.txLimits, input.centrifugeId))
+            )
+        );
+
+        // Messaging
+        gateway = Gateway(
+            submit(
+                "gateway",
+                V3_3,
+                abi.encodePacked(type(Gateway).creationCode, abi.encode(input.centrifugeId, root, batcher))
+            )
+        );
+
+        multiAdapter = MultiAdapter(
+            submit(
+                "multiAdapter",
+                V3_3,
+                abi.encodePacked(type(MultiAdapter).creationCode, abi.encode(input.centrifugeId, gateway, batcher))
+            )
+        );
+
+        envoy = Envoy(submit("envoy", V3_3, abi.encodePacked(type(Envoy).creationCode, abi.encode(batcher))));
+
+        messageProcessor = MessageProcessor(
+            submit(
+                "messageProcessor",
+                V3_3,
+                abi.encodePacked(type(MessageProcessor).creationCode, abi.encode(root, batcher))
+            )
+        );
+
+        messageDispatcher = MessageDispatcher(
+            submit(
+                "messageDispatcher",
+                V3_3,
+                abi.encodePacked(
+                    type(MessageDispatcher).creationCode, abi.encode(input.centrifugeId, root, gateway, batcher)
+                )
+            )
+        );
+
+        // Spoke
+        shareTokenRegistrar = ShareTokenRegistrar(
+            submit(
+                "shareTokenRegistrar",
+                V3_3,
+                abi.encodePacked(type(ShareTokenRegistrar).creationCode, abi.encode(root, batcher))
+            )
+        );
+
+        escrowFactory = EscrowFactory(
+            submit("escrowFactory", V3_3, abi.encodePacked(type(EscrowFactory).creationCode, abi.encode(root, batcher)))
+        );
+
+        spokeRegistry = SpokeRegistry(
+            submit("spokeRegistry", V3_3, abi.encodePacked(type(SpokeRegistry).creationCode, abi.encode(batcher)))
+        );
+
+        snapshotQueue = SnapshotQueue(
+            submit("snapshotQueue", V3_3, abi.encodePacked(type(SnapshotQueue).creationCode, abi.encode(batcher)))
+        );
+
+        spoke = Spoke(
+            submit(
+                "spoke",
+                V3_3,
+                abi.encodePacked(
+                    type(Spoke).creationCode, abi.encode(gateway, snapshotQueue, spokeRegistry, escrowFactory, batcher)
+                )
+            )
+        );
+
+        spokeHandler = SpokeHandler(
+            submit(
+                "spokeHandler",
+                V3_3,
+                abi.encodePacked(type(SpokeHandler).creationCode, abi.encode(spokeRegistry, escrowFactory, batcher))
+            )
+        );
+
+        // Hub
+        hubRegistry = HubRegistry(
+            submit("hubRegistry", V3_3, abi.encodePacked(type(HubRegistry).creationCode, abi.encode(batcher)))
+        );
+
+        accounting = Accounting(
+            submit("accounting", V3_3, abi.encodePacked(type(Accounting).creationCode, abi.encode(batcher)))
+        );
+
+        holdings = Holdings(
+            submit("holdings", V3_3, abi.encodePacked(type(Holdings).creationCode, abi.encode(hubRegistry, batcher)))
+        );
+
+        shareClassManager = ShareClassManager(
+            submit(
+                "shareClassManager",
+                V3_3,
+                abi.encodePacked(type(ShareClassManager).creationCode, abi.encode(hubRegistry, batcher))
+            )
+        );
+
+        hub = Hub(
+            submit(
+                "hub",
+                V3_3,
+                abi.encodePacked(
+                    type(Hub).creationCode,
+                    abi.encode(gateway, holdings, accounting, hubRegistry, multiAdapter, shareClassManager, batcher)
+                )
+            )
+        );
+
+        hubHandler = HubHandler(
+            submit(
+                "hubHandler",
+                V3_3,
+                abi.encodePacked(
+                    type(HubHandler).creationCode, abi.encode(hub, holdings, hubRegistry, shareClassManager, batcher)
+                )
+            )
+        );
+
+        // Admin (depends on core contracts)
+        protocolGuardian = ProtocolGuardian(
+            submit(
+                "protocolGuardian",
+                V3_3,
+                abi.encodePacked(
+                    type(ProtocolGuardian).creationCode,
+                    abi.encode(ISafe(address(batcher)), root, messageDispatcher, TokenBridge(tokenBridgeAddr))
+                )
+            )
+        );
+
+        opsGuardian = OpsGuardian(
+            submit(
+                "opsGuardian",
+                V3_3,
+                abi.encodePacked(
+                    type(OpsGuardian).creationCode,
+                    abi.encode(ISafe(address(batcher)), hub, TokenBridge(tokenBridgeAddr), multiAdapter)
+                )
+            )
+        );
+    }
+
+    /// @dev Taken as it stands: its delay, wards and endorsements are whatever governance left them.
+    ///      Registered anyway, so `REPLACE` keeps the entry rather than dropping it, and with no version, so
+    ///      the registry keeps the version and block number already recorded against that address.
+    function _existingRoot(address root_) internal returns (Root) {
+        require(root_.code.length > 0, "The root passed in is not a deployed contract");
+
+        register("root", root_, "");
+
+        return Root(root_);
+    }
+
+    function _deployNonCore(address batcher, DeployerInput memory input) internal {
+        refundEscrowFactory = RefundEscrowFactory(
+            submit(
+                "refundEscrowFactory",
+                V3_3,
+                abi.encodePacked(type(RefundEscrowFactory).creationCode, abi.encode(batcher))
+            )
+        );
+
+        subsidyManager = SubsidyManager(
+            submit(
+                "subsidyManager",
+                V3_3,
+                abi.encodePacked(type(SubsidyManager).creationCode, abi.encode(refundEscrowFactory, batcher))
+            )
+        );
+
+        freezeOnlyHook = ShareTokenHook(
+            submit(
+                "freezeOnlyHook",
+                V3_3,
+                abi.encodePacked(
+                    type(ShareTokenHook).creationCode,
+                    abi.encode(
+                        address(root),
+                        address(envoy),
+                        address(spokeRegistry),
+                        address(spoke),
+                        address(spokeHandler),
+                        batcher,
+                        address(escrowFactory),
+                        HookPolicies.freezeOnly()
+                    )
+                )
+            )
+        );
+
+        fullRestrictionsHook = ShareTokenHook(
+            submit(
+                "fullRestrictionsHook",
+                V3_3,
+                abi.encodePacked(
+                    type(ShareTokenHook).creationCode,
+                    abi.encode(
+                        address(root),
+                        address(envoy),
+                        address(spokeRegistry),
+                        address(spoke),
+                        address(spokeHandler),
+                        batcher,
+                        address(escrowFactory),
+                        HookPolicies.fullRestrictions()
+                    )
+                )
+            )
+        );
+
+        freelyTransferableHook = ShareTokenHook(
+            submit(
+                "freelyTransferableHook",
+                V3_3,
+                abi.encodePacked(
+                    type(ShareTokenHook).creationCode,
+                    abi.encode(
+                        address(root),
+                        address(envoy),
+                        address(spokeRegistry),
+                        address(spoke),
+                        address(spokeHandler),
+                        batcher,
+                        address(escrowFactory),
+                        HookPolicies.freelyTransferable()
+                    )
+                )
+            )
+        );
+
+        redemptionRestrictionsHook = ShareTokenHook(
+            submit(
+                "redemptionRestrictionsHook",
+                V3_3,
+                abi.encodePacked(
+                    type(ShareTokenHook).creationCode,
+                    abi.encode(
+                        address(root),
+                        address(envoy),
+                        address(spokeRegistry),
+                        address(spoke),
+                        address(spokeHandler),
+                        batcher,
+                        address(escrowFactory),
+                        HookPolicies.redemptionRestrictions()
+                    )
+                )
+            )
+        );
+
+        queueManager = QueueManager(
+            submit("queueManager", V3_3, abi.encodePacked(type(QueueManager).creationCode, abi.encode(envoy, spoke)))
+        );
+
+        accountingToken = AccountingToken(
+            submit("accountingToken", V3_3, abi.encodePacked(type(AccountingToken).creationCode, abi.encode(envoy)))
+        );
+
+        // Timelock is immutable and matches the protocol delay, read off the Root in use rather than off the
+        // input: a kept Root keeps whatever delay governance left it. Per-pool stewards and MultiAdapter
+        // manager registration are operational (governance) steps, so no deploy-time wiring is needed.
+        adapterFailover = AdapterFailover(
+            submit(
+                "adapterFailover",
+                V3_3,
+                abi.encodePacked(
+                    type(AdapterFailover).creationCode, abi.encode(envoy, multiAdapter, uint64(root.delay()))
+                )
+            )
+        );
+
+        scriptHelpers = ScriptHelpers(submit("scriptHelpers", V3_3, abi.encodePacked(type(ScriptHelpers).creationCode)));
+
+        onchainPMFactory = IOnchainPMFactory(
+            submit(
+                "onchainPMFactory",
+                V3_3,
+                abi.encodePacked(
+                    vm.getCode("out-ir/OnchainPM.sol/OnchainPMFactory.json"), abi.encode(envoy, spoke, gateway)
+                )
+            )
+        );
+
+        flashLoanHelper = FlashLoanHelper(
+            submit(
+                "flashLoanHelper",
+                V3_3,
+                abi.encodePacked(type(FlashLoanHelper).creationCode, abi.encode(onchainPMFactory))
+            )
+        );
+
+        onOffRampFactory = OnOffRampFactory(
+            submit(
+                "onOffRampFactory",
+                V3_3,
+                abi.encodePacked(type(OnOffRampFactory).creationCode, abi.encode(envoy, spoke, accountingToken))
+            )
+        );
+
+        shareManager = ShareManager(
+            submit(
+                "shareManager",
+                V3_3,
+                abi.encodePacked(type(ShareManager).creationCode, abi.encode(envoy, spoke, spokeRegistry))
+            )
+        );
+
+        approvalGuard = ApprovalGuard(submit("approvalGuard", V3_3, abi.encodePacked(type(ApprovalGuard).creationCode)));
+
+        circuitBreakerGuard = CircuitBreakerGuard(
+            submit("circuitBreakerGuard", V3_3, abi.encodePacked(type(CircuitBreakerGuard).creationCode))
+        );
+
+        slippageGuard = SlippageGuard(
+            submit(
+                "slippageGuard",
+                V3_3,
+                abi.encodePacked(type(SlippageGuard).creationCode, abi.encode(spoke, envoy, onchainPMFactory))
+            )
+        );
+
+        identityValuation = IdentityValuation(
+            submit(
+                "identityValuation",
+                V3_3,
+                abi.encodePacked(type(IdentityValuation).creationCode, abi.encode(hubRegistry))
+            )
+        );
+
+        oracleValuation = OracleValuation(
+            submit(
+                "oracleValuation",
+                V3_3,
+                abi.encodePacked(type(OracleValuation).creationCode, abi.encode(hub, hubRegistry, envoy))
+            )
+        );
+
+        navManager = NAVManager(
+            submit("navManager", V3_3, abi.encodePacked(type(NAVManager).creationCode, abi.encode(hub, envoy)))
+        );
+
+        simplePriceManager = SimplePriceManager(
+            submit(
+                "simplePriceManager",
+                V3_3,
+                abi.encodePacked(type(SimplePriceManager).creationCode, abi.encode(hub, address(navManager)))
+            )
+        );
+
+        bridgeCircuitBreaker = BridgeCircuitBreaker(
+            submit(
+                "bridgeCircuitBreaker",
+                V3_3,
+                abi.encodePacked(
+                    type(BridgeCircuitBreaker).creationCode,
+                    abi.encode(address(envoy), address(circuitBreakerGuard), batcher)
+                )
+            )
+        );
+
+        tokenBridge = TokenBridge(
+            submit(
+                "tokenBridge",
+                V3_3,
+                abi.encodePacked(
+                    type(TokenBridge).creationCode,
+                    abi.encode(spoke, gateway, input.centrifugeId, address(envoy), batcher)
+                )
+            )
+        );
+
+        _deployVaultHub(batcher);
+        if (input.vaults) _deployVaultSpoke(batcher);
+    }
+
+    /// @dev The hub half of the Vault Development Kit, on every chain: a pool's hub settles through it for
+    ///      vaults on any spoke, including when its own chain cannot run vaults.
+    function _deployVaultHub(address batcher) internal {
+        orderBook = OrderBook(
+            submit(
+                "orderBook",
+                V3_3,
+                abi.encodePacked(type(OrderBook).creationCode, abi.encode(hubRegistry, hub, gateway, envoy, batcher))
+            )
+        );
+
+        // Reads the local centrifugeId off `hub.sender()`, which the core batcher has filed by now
+        feeRequestManager = FeeRequestManager(
+            submit(
+                "feeRequestManager",
+                V3_3,
+                abi.encodePacked(type(FeeRequestManager).creationCode, abi.encode(hub, orderBook, envoy, gateway))
+            )
+        );
+    }
+
+    /// @dev The spoke half of the Vault Development Kit: per-network singletons every pool shares, and the
+    ///      factory its vaults come from. Opt-in, since `VaultFactory` is over EIP-170 and would revert the
+    ///      whole launch on a chain without EIP-7907.
+    ///
+    ///      A vault is per position, deployed through `VaultFactory.deploy` ahead of the hub's `DeployAndLink`,
+    ///      never here. `BasinLiquidityRoute` is not deployed either: it is one route per Basin venue, and which venues a
+    ///      chain has is deployment data, not something this branch can name. Its only ward is the
+    ///      chain's Root, which whoever deploys it passes in, and it
+    ///      needs no other protocol wiring, only the pools that draw on it enabling it, so deploying it after the
+    ///      launch, against a venue and the deployed `AccountingToken`, loses nothing.
+    function _deployVaultSpoke(address batcher) internal {
+        vaultFactory = VaultFactory(
+            submit(
+                "vaultFactory",
+                V3_3,
+                abi.encodePacked(type(VaultFactory).creationCode, abi.encode(address(root), spoke, spokeRegistry))
+            )
+        );
+
+        vaultRequestRouter = VaultRequestRouter(
+            payable(submit(
+                    "vaultRequestRouter",
+                    V3_3,
+                    abi.encodePacked(
+                        type(VaultRequestRouter).creationCode,
+                        abi.encode(spoke, spokeRegistry, subsidyManager, envoy, batcher)
+                    )
+                ))
+        );
+
+        vaultRouter = VaultRouter(
+            submit(
+                "vaultRouter",
+                V3_3,
+                abi.encodePacked(type(VaultRouter).creationCode, abi.encode(spoke, spokeRegistry, batcher))
+            )
+        );
+
+        spokeOracle = SpokeOracle(
+            submit(
+                "spokeOracle",
+                V3_3,
+                abi.encodePacked(
+                    type(SpokeOracle).creationCode,
+                    abi.encode(spokeRegistry, SPOKE_ORACLE_MAX_AGE, SPOKE_ORACLE_MAX_SKEW, envoy)
+                )
+            )
+        );
+
+        // The closed-access shape by default: request transfers are declined by the policy
+        perRequestPolicy = PerRequestPolicy(
+            submit("perRequestPolicy", V3_3, abi.encodePacked(type(PerRequestPolicy).creationCode, abi.encode(false)))
+        );
+
+        transferablePerRequestPolicy = PerRequestPolicy(
+            submit(
+                "transferablePerRequestPolicy",
+                V3_3,
+                abi.encodePacked(type(PerRequestPolicy).creationCode, abi.encode(true))
+            )
+        );
+
+        perInvestorPolicy = PerInvestorPolicy(submit("perInvestorPolicy", V3_3, type(PerInvestorPolicy).creationCode));
+
+        perPeriodPolicy = PerPeriodPolicy(
+            submit(
+                "perPeriodPolicy",
+                V3_3,
+                abi.encodePacked(
+                    type(PerPeriodPolicy).creationCode,
+                    abi.encode(
+                        PER_PERIOD_WINDOW, PER_PERIOD_OFFSET, PER_PERIOD_DEPOSIT_NOTICE, PER_PERIOD_REDEEM_NOTICE
+                    )
+                )
+            )
+        );
+
+        reserveInstantPolicy = ReserveInstantPolicy(
+            submit(
+                "reserveInstantPolicy",
+                V3_3,
+                abi.encodePacked(type(ReserveInstantPolicy).creationCode, abi.encode(spoke, envoy))
+            )
+        );
+
+        vaultLiquidityRoute = VaultLiquidityRoute(
+            submit(
+                "vaultLiquidityRoute",
+                V3_3,
+                abi.encodePacked(type(VaultLiquidityRoute).creationCode, abi.encode(spoke, envoy, root))
+            )
+        );
+    }
+
+    function _deployAdapters(address batcher, AdaptersInput memory input) internal {
+        if (input.layerZero.shouldDeploy) {
+            require(input.layerZero.endpoint != address(0), "LayerZero endpoint address cannot be zero");
+            require(input.layerZero.endpoint.code.length > 0, "LayerZero endpoint must be a deployed contract");
+            require(input.layerZero.delegate != address(0), "LayerZero delegate address cannot be zero");
+            require(
+                input.layerZero.configParams.length == 0
+                    || input.layerZero.configParams.length == input.connections.length,
+                "configParams must mimics connections"
+            );
+
+            layerZeroAdapter = LayerZeroAdapter(
+                submit(
+                    "layerZeroAdapter",
+                    V3_3,
+                    abi.encodePacked(
+                        type(LayerZeroAdapter).creationCode,
+                        // Set delegate to the first adapter batcher initially, to be able to set ULN config
+                        abi.encode(multiAdapter, input.layerZero.endpoint, batcher, batcher)
+                    )
+                )
+            );
+
+            layerZeroStandby = _deployStandby(
+                "layerZeroStandby",
+                abi.encodePacked(
+                    type(LayerZeroAdapter).creationCode,
+                    // As above: the batchers hold the delegacy until they have mirrored the ULN config onto it
+                    abi.encode(gatedAddress("layerZeroStandby", V3_3), input.layerZero.endpoint, batcher, batcher)
+                )
+            );
+        }
+
+        if (input.axelar.shouldDeploy) {
+            require(input.axelar.gateway != address(0), "Axelar gateway address cannot be zero");
+            require(input.axelar.gasService != address(0), "Axelar gas service address cannot be zero");
+            require(input.axelar.gateway.code.length > 0, "Axelar gateway must be a deployed contract");
+            require(input.axelar.gasService.code.length > 0, "Axelar gas service must be a deployed contract");
+
+            axelarAdapter = AxelarAdapter(
+                submit(
+                    "axelarAdapter",
+                    V3_3,
+                    abi.encodePacked(
+                        type(AxelarAdapter).creationCode,
+                        abi.encode(multiAdapter, input.axelar.gateway, input.axelar.gasService, batcher)
+                    )
+                )
+            );
+
+            axelarStandby = _deployStandby(
+                "axelarStandby",
+                abi.encodePacked(
+                    type(AxelarAdapter).creationCode,
+                    abi.encode(
+                        gatedAddress("axelarStandby", V3_3), input.axelar.gateway, input.axelar.gasService, batcher
+                    )
+                )
+            );
+        }
+
+        if (input.chainlink.shouldDeploy) {
+            require(input.chainlink.ccipRouter != address(0), "Chainlink ccipRouter address cannot be zero");
+            require(input.chainlink.ccipRouter.code.length > 0, "Chainlink ccipRouter must be a deployed contract");
+
+            chainlinkAdapter = ChainlinkAdapter(
+                submit(
+                    "chainlinkAdapter",
+                    V3_3,
+                    abi.encodePacked(
+                        type(ChainlinkAdapter).creationCode,
+                        abi.encode(multiAdapter, input.chainlink.ccipRouter, batcher)
+                    )
+                )
+            );
+
+            chainlinkStandby = _deployStandby(
+                "chainlinkStandby",
+                abi.encodePacked(
+                    type(ChainlinkAdapter).creationCode,
+                    abi.encode(gatedAddress("chainlinkStandby", V3_3), input.chainlink.ccipRouter, batcher)
+                )
+            );
+        }
+
+        if (input.hyperlane.shouldDeploy) {
+            require(input.hyperlane.mailbox != address(0), "Hyperlane mailbox address cannot be zero");
+            require(input.hyperlane.mailbox.code.length > 0, "Hyperlane mailbox must be a deployed contract");
+
+            hyperlaneAdapter = HyperlaneAdapter(
+                submit(
+                    "hyperlaneAdapter",
+                    V3_3,
+                    abi.encodePacked(
+                        type(HyperlaneAdapter).creationCode, abi.encode(multiAdapter, input.hyperlane.mailbox, batcher)
+                    )
+                )
+            );
+
+            hyperlaneStandby = _deployStandby(
+                "hyperlaneStandby",
+                abi.encodePacked(
+                    type(HyperlaneAdapter).creationCode,
+                    abi.encode(gatedAddress("hyperlaneStandby", V3_3), input.hyperlane.mailbox, batcher)
+                )
+            );
+        }
+    }
+
+    /// @dev A standby needs an underlying of its own, whose entrypoint is the standby rather than the
+    ///      MultiAdapter, so that its inbound votes land on the standby. Each needs the other's address at
+    ///      construction, which is why the underlying is built against the standby's gated address, taken
+    ///      before either exists. `underlyingInitCode` is that bridge adapter's, entrypoint included.
+    function _deployStandby(string memory name, bytes memory underlyingInitCode) internal returns (StandbyAdapter) {
+        address underlying = submit(string.concat(name, "Underlying"), V3_3, underlyingInitCode);
+
+        return StandbyAdapter(
+            submit(
+                name, V3_3, abi.encodePacked(type(StandbyAdapter).creationCode, abi.encode(multiAdapter, underlying))
+            )
+        );
+    }
+
+    function coreReport() public view returns (CoreReport memory) {
+        return CoreReport(
+            gateway,
+            multiAdapter,
+            messageProcessor,
+            messageDispatcher,
+            escrowFactory,
+            spoke,
+            snapshotQueue,
+            shareTokenRegistrar,
+            spokeHandler,
+            spokeRegistry,
+            envoy,
+            hubRegistry,
+            accounting,
+            holdings,
+            shareClassManager,
+            hubHandler,
+            hub,
+            root,
+            protocolGuardian,
+            opsGuardian,
+            gasService
+        );
+    }
+
+    function nonCoreReport() public view returns (NonCoreReport memory) {
+        return NonCoreReport(
+            coreReport(),
+            subsidyManager,
+            refundEscrowFactory,
+            freezeOnlyHook,
+            fullRestrictionsHook,
+            freelyTransferableHook,
+            redemptionRestrictionsHook,
+            queueManager,
+            onOffRampFactory,
+            shareManager,
+            identityValuation,
+            oracleValuation,
+            navManager,
+            simplePriceManager,
+            tokenBridge,
+            bridgeCircuitBreaker,
+            vaultFactory,
+            vaultRequestRouter,
+            vaultRouter,
+            orderBook
+        );
+    }
+
+    function adaptersReport() public view returns (AdaptersReport memory) {
+        return AdaptersReport(
+            coreReport(),
+            layerZeroAdapter,
+            axelarAdapter,
+            chainlinkAdapter,
+            hyperlaneAdapter,
+            layerZeroStandby,
+            axelarStandby,
+            chainlinkStandby,
+            hyperlaneStandby
+        );
+    }
+}
+
+function noAdaptersInput() pure returns (AdaptersInput memory) {
+    return AdaptersInput({
+        axelar: AxelarInput({shouldDeploy: false, gateway: address(0), gasService: address(0)}),
+        layerZero: LayerZeroInput({
+            shouldDeploy: false, endpoint: address(0), delegate: address(0), configParams: new SetConfigParam[](0)
+        }),
+        chainlink: ChainlinkInput({shouldDeploy: false, ccipRouter: address(0)}),
+        hyperlane: HyperlaneInput({shouldDeploy: false, mailbox: address(0), ism: address(0)}),
+        connections: new AdapterConnections[](0)
+    });
+}
+
+function defaultTxLimits() pure returns (uint8[32] memory) {}

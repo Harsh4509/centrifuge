@@ -1,0 +1,28 @@
+@startuml hooks
+title Transfer and Role Hooks
+hide empty members
+
+package token {
+    class ShareToken
+    interface ITransferHook
+    interface IRoleHook
+}
+
+package vaults {
+    class Vault
+    class RoleCheckLib <<library>>
+}
+
+class ShareTokenHook
+class HookPolicies <<library>>
+
+HookPolicies ..> ShareTokenHook : presets
+ShareTokenHook -up-|> ITransferHook
+ShareTokenHook -up-|> IRoleHook
+
+
+ShareToken --> ITransferHook
+Vault ..> RoleCheckLib : vault actions
+RoleCheckLib ..> IRoleHook : role checks, via the share token's hook
+
+@enduml

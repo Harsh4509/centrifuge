@@ -1,0 +1,128 @@
+# Build ABIs — one release tag's contract ABIs, uploaded for the contract registry.
+#
+# The registry (centrifuge/protocol-registry) publishes every deployed contract's ABI as built at the tag
+# its `version` resolves to. It cannot build, so each tag is built here once, into one R2 object per
+# artifact plus a manifest written last, whose presence marks the bundle complete:
+#
+#   abis/<tag>/<Artifact>.json   the artifact's ABI
+#   abis/<tag>/manifest.json     { tag, commit, builtAt, artifacts }
+#
+# Runs on every pushed release tag, except where GitHub starts no run: a tag pushed with GITHUB_TOKEN, or
+# any tag in a push of more than three. Those, a tag pushed before this file reached its branch, and a
+# rebuild are dispatched by hand; the registry reports a tag it needs and finds no bundle for. It builds
+# source and names no chain.
+#
+# R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY are repository secrets: S3 credentials scoped to that one bucket's
+# objects, owned in centrifuge/ops-v3's tokens.yaml. Uploads go through the S3 API: `wrangler r2 object put`
+# would need account-wide R2 write.
+
+name: Build ABIs
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v3.3.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: build-abis-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ABIs for ${{ inputs.tag || github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      BUCKET: centrifuge-protocol-registry
+      R2_ENDPOINT: https://1a71ac8bbd35fd2bf390fddf66a44294.r2.cloudflarestorage.com
+    steps:
+      # The tag ends up in a git ref and in object keys; nothing but a release-shaped name gets that far
+      - name: Check the tag name
+        run: '[[ "$TAG" =~ ^v[0-9]+(\.[0-9]+){0,2}(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::not a release tag: $TAG"; exit 1; }'
+
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.4.4
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          forge build --skip test
+          # src-ir contracts build under the ir profile, which tags before v3.2.0 do not have. A tag that
+          # has it must build it: a bundle without its src-ir contracts is incomplete.
+          if grep -q '^\[profile\.ir\]' foundry.toml; then
+            FOUNDRY_PROFILE=ir forge build --skip test
+          else
+            echo "::notice::no ir profile at $TAG"
+          fi
+
+      # One file per artifact, from out/ then out-ir/, each in sorted directory order and skipping test
+      # sources. Where two sources define an artifact of the same name, the first wins: the order the
+      # registry generator looked ABIs up in when it built them itself. protocol-registry's
+      # scripts/build-abi-bundle.ts does the same for local runs.
+      - name: Bundle
+        run: |
+          set -euo pipefail
+          mkdir bundle
+          declare -A kept
+          for root in out out-ir; do
+            [ -d "$root" ] || continue
+            for dir in $(ls "$root" | LC_ALL=C sort); do
+              case "$dir" in *.t.sol | build-info) continue ;; esac
+              [ -d "$root/$dir" ] || continue
+              for file in $(ls "$root/$dir" | LC_ALL=C sort); do
+                case "$file" in *.json) ;; *) continue ;; esac
+                abi=$(jq -ce '.abi | arrays' "$root/$dir/$file") || continue
+                if [ -e "bundle/$file" ]; then
+                  [ "$abi" = "$(cat "bundle/$file")" ] ||
+                    echo "::warning::${file%.json}: kept ${kept[$file]}, skipped $root/$dir with a different ABI"
+                  continue
+                fi
+                printf '%s\n' "$abi" > "bundle/$file"
+                kept[$file]="$root/$dir"
+              done
+            done
+          done
+          count=$(ls bundle | wc -l)
+          [ "$count" -gt 0 ] || { echo "::error::no artifacts under out/"; exit 1; }
+          ls bundle | LC_ALL=C sort | sed 's/\.json$//' | jq -R . | jq -s \
+            --arg tag "$TAG" --arg commit "$(git rev-parse HEAD)" --arg builtAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{tag: $tag, commit: $commit, builtAt: $builtAt, artifacts: .}' > manifest.json
+          echo "$count artifacts for $TAG at $(git rev-parse HEAD)"
+
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+        run: |
+          set -euo pipefail
+          # A manifest marks the bundle complete, so a rebuild takes the old one down before touching the
+          # artifacts under it. Then the artifacts, dropping any a previous build of a moved tag left
+          # behind, and the new manifest last.
+          aws s3 rm "s3://$BUCKET/abis/$TAG/manifest.json" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          aws s3 sync bundle "s3://$BUCKET/abis/$TAG/" --endpoint-url "$R2_ENDPOINT" \
+            --delete --exclude manifest.json --content-type application/json --only-show-errors
+          aws s3 cp manifest.json "s3://$BUCKET/abis/$TAG/manifest.json" \
+            --endpoint-url "$R2_ENDPOINT" --content-type application/json --only-show-errors
+          {
+            echo "### ABIs for \`$TAG\`"
+            jq -r '"\(.artifacts | length) artifacts from \(.commit)"' manifest.json
+          } >> "$GITHUB_STEP_SUMMARY"

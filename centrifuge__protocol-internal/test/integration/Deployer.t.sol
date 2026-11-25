@@ -1,0 +1,2014 @@
+// SPDX-License-Identifier: BUSL-1.1
+pragma solidity 0.8.28;
+
+import {ERC20} from "../../src/misc/ERC20.sol";
+import {IAuth} from "../../src/misc/interfaces/IAuth.sol";
+
+import {PoolId} from "../../src/core/types/PoolId.sol";
+import {AssetId} from "../../src/core/types/AssetId.sol";
+import {MessageLib} from "../../src/core/messaging/libraries/MessageLib.sol";
+import {IMultiAdapter} from "../../src/core/messaging/interfaces/IMultiAdapter.sol";
+
+import {Root} from "../../src/admin/Root.sol";
+import {ISafe} from "../../src/admin/interfaces/ISafe.sol";
+import {IOpsGuardian} from "../../src/admin/interfaces/IOpsGuardian.sol";
+
+import {DeployPhase} from "../../script/deploy/GatedDeployer.s.sol";
+import {
+    DeployerInput,
+    FullDeployer,
+    AdaptersInput,
+    AxelarInput,
+    LayerZeroInput,
+    ChainlinkInput,
+    HyperlaneInput,
+    defaultTxLimits,
+    AdapterConnections
+} from "../../script/deploy/FullDeployer.s.sol";
+
+import "forge-std/Test.sol";
+
+import {RootFixes} from "../../src/deployment/RootFixes.sol";
+import {AxelarAdapter} from "../../src/adapters/AxelarAdapter.sol";
+import {ChainlinkAdapter} from "../../src/adapters/ChainlinkAdapter.sol";
+import {HyperlaneAdapter} from "../../src/adapters/HyperlaneAdapter.sol";
+import {LayerZeroAdapter} from "../../src/adapters/LayerZeroAdapter.sol";
+import {ISO4217_DECIMALS, iso4217Codes} from "../../src/deployment/Currencies.sol";
+import {CoreReport, CoreActionBatcher, RootAccessMismatch} from "../../src/deployment/ActionBatchers.sol";
+import {ILayerZeroEndpointV2Like, SetConfigParam} from "../../src/deployment/interfaces/ILayerZeroEndpointV2Like.sol";
+
+/// @dev Records what the batchers configure, per OApp and lane, so a test can tell which of them got which config
+contract LayerZeroEndpointMock {
+    address public immutable sendLib = makeAddr("SendLib");
+    address public immutable receiveLib = makeAddr("ReceiveLib");
+
+    mapping(address oapp => address delegate) public delegates;
+    mapping(address oapp => mapping(uint32 eid => address)) public sendLibraries;
+    mapping(address oapp => mapping(uint32 eid => address)) public receiveLibraries;
+    mapping(address oapp => mapping(address lib => mapping(uint32 eid => bytes))) public configs;
+
+    function setDelegate(address _delegate) external {
+        delegates[msg.sender] = _delegate;
+    }
+
+    function defaultSendLibrary(uint32) external view returns (address) {
+        return sendLib;
+    }
+
+    function defaultReceiveLibrary(uint32) external view returns (address) {
+        return receiveLib;
+    }
+
+    function setSendLibrary(address oapp, uint32 eid, address lib) external onlyDelegate(oapp) {
+        sendLibraries[oapp][eid] = lib;
+    }
+
+    function setReceiveLibrary(address oapp, uint32 eid, address lib, uint256) external onlyDelegate(oapp) {
+        receiveLibraries[oapp][eid] = lib;
+    }
+
+    function setConfig(address oapp, address lib, SetConfigParam[] calldata params) external onlyDelegate(oapp) {
+        for (uint256 i; i < params.length; i++) {
+            configs[oapp][lib][params[i].eid] = params[i].config;
+        }
+    }
+
+    /// @dev As the real endpoint: whoever configures an OApp must be it or its delegate, which is what
+    ///      makes the batcher hold the delegacy while it configures and hand it over only afterwards
+    modifier onlyDelegate(address oapp) {
+        require(msg.sender == oapp || msg.sender == delegates[oapp], "not delegate");
+        _;
+    }
+
+    function makeAddr(string memory name) internal pure returns (address) {
+        return address(uint160(uint256(keccak256(bytes(name)))));
+    }
+}
+
+contract FullDeploymentConfigTest is Test, FullDeployer {
+    uint16 constant CENTRIFUGE_ID = 23;
+    ISafe immutable ADMIN_SAFE = ISafe(makeAddr("AdminSafe"));
+    ISafe immutable OPS_SAFE = ISafe(makeAddr("OpsSafe"));
+
+    address immutable AXELAR_GATEWAY = makeAddr("AxelarGateway");
+    address immutable AXELAR_GAS_SERVICE = makeAddr("AxelarGasService");
+
+    address immutable LAYERZERO_ENDPOINT = address(new LayerZeroEndpointMock());
+    address immutable LAYERZERO_DELEGATE = makeAddr("LayerZeroDelegate");
+
+    address immutable CHAINLINK_CCIP_ROUTER = makeAddr("ChainlinkCCIPRouter");
+
+    address immutable HYPERLANE_MAILBOX = makeAddr("HyperlaneMailbox");
+    address immutable HYPERLANE_ISM = makeAddr("HyperlaneIsm");
+
+    bytes constant SIMPLE_CONTRACT = hex"6001600160005260206000f3";
+
+    uint256 internal constant MAINNET_DELAY = 48 hours;
+
+    uint16 internal centrifugeId_ = CENTRIFUGE_ID;
+    address internal namespace_;
+
+    /// @dev What a launch is handed. Zero root means it deploys its own; the subclasses below vary them
+    address internal existingRoot_;
+    uint256 internal delay_ = MAINNET_DELAY;
+    bool internal vaults_ = true;
+    AdapterConnections[] internal connections_;
+    SetConfigParam[] internal layerZeroConfigParams_;
+
+    /// @dev Mock deployed code for validation check which requires deployed code length > 0
+    function _mockBridgeContracts() internal {
+        vm.etch(AXELAR_GATEWAY, SIMPLE_CONTRACT);
+        vm.etch(AXELAR_GAS_SERVICE, SIMPLE_CONTRACT);
+        vm.etch(CHAINLINK_CCIP_ROUTER, SIMPLE_CONTRACT);
+        vm.etch(HYPERLANE_MAILBOX, SIMPLE_CONTRACT);
+    }
+
+    function setUp() public virtual {
+        _mockBridgeContracts();
+
+        // Both phases in one go, through a gate this contract administers and executes
+        _bootstrap();
+        deployFullBothPhases(_input(""), namespace_, _executors(address(this)));
+    }
+
+    /// @dev The gate is brought up by the deployment itself, so there is nothing to place first. This
+    ///      contract owns the namespace it deploys under because it is the one that commits in it
+    function _bootstrap() internal {
+        namespace_ = address(this);
+    }
+
+    /// @dev Every listed currency is registered at the ISO 4217 precision. A duplicate in the list would
+    ///      have reverted the deployment, `registerAsset` refusing one, so the list needs no check of its own.
+    ///      The count is pinned rather than merely non-zero: registering a currency after the fact costs a
+    ///      spell on every live chain, so a list that quietly loses one should fail here and not on a chain.
+    ///      `isRegistered` before `decimals`, which reverts with `AssetNotFound` on an unregistered asset and
+    ///      would otherwise take the run down without saying which currency was missing.
+    function _assertCurrenciesRegistered() internal view {
+        AssetId[] memory currencies = iso4217Codes();
+        assertEq(currencies.length, 46, "currency list changed");
+
+        for (uint256 i; i < currencies.length; i++) {
+            assertTrue(hubRegistry.isRegistered(currencies[i]), "unregistered ISO 4217 code");
+            assertEq(hubRegistry.decimals(currencies[i]), ISO4217_DECIMALS, "wrong ISO 4217 precision");
+        }
+    }
+
+    /// @dev Deployed by whoever is named here, in the namespace this contract commits in
+    function _executors(address executor_) internal pure returns (address[] memory executors) {
+        executors = new address[](1);
+        executors[0] = executor_;
+    }
+
+    function _input(string memory deploymentId_) internal view returns (DeployerInput memory) {
+        return DeployerInput({
+            centrifugeId: centrifugeId_,
+            deploymentId: deploymentId_,
+            txLimits: defaultTxLimits(),
+            protocolSafe: ADMIN_SAFE,
+            opsSafe: OPS_SAFE,
+            root: existingRoot_,
+            delay: delay_,
+            vaults: vaults_,
+            adapters: AdaptersInput({
+                axelar: AxelarInput({shouldDeploy: true, gateway: AXELAR_GATEWAY, gasService: AXELAR_GAS_SERVICE}),
+                layerZero: LayerZeroInput({
+                    shouldDeploy: true,
+                    endpoint: LAYERZERO_ENDPOINT,
+                    delegate: LAYERZERO_DELEGATE,
+                    configParams: layerZeroConfigParams_
+                }),
+                chainlink: ChainlinkInput({shouldDeploy: true, ccipRouter: CHAINLINK_CCIP_ROUTER}),
+                hyperlane: HyperlaneInput({shouldDeploy: true, mailbox: HYPERLANE_MAILBOX, ism: HYPERLANE_ISM}),
+                connections: connections_
+            })
+        });
+    }
+}
+
+contract FullDeploymentTestCore is FullDeploymentConfigTest {
+    function testGateway(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(opsGuardian));
+        vm.assume(nonWard != address(multiAdapter));
+        vm.assume(nonWard != address(messageDispatcher));
+        vm.assume(nonWard != address(messageProcessor));
+
+        assertEq(gateway.wards(address(root)), 1);
+        assertEq(gateway.wards(address(opsGuardian)), 1);
+        assertEq(gateway.wards(address(multiAdapter)), 1);
+        assertEq(gateway.wards(address(messageDispatcher)), 1);
+        assertEq(gateway.wards(address(messageProcessor)), 1);
+        assertEq(gateway.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(gateway.localCentrifugeId(), CENTRIFUGE_ID);
+        assertEq(address(gateway.processor()), address(messageProcessor));
+        assertEq(address(gateway.adapter()), address(multiAdapter));
+        assertEq(address(gateway.messageGas()), address(gasService));
+    }
+
+    function testMultiAdapter(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(opsGuardian));
+        vm.assume(nonWard != address(gateway));
+        vm.assume(nonWard != address(messageDispatcher));
+        vm.assume(nonWard != address(messageProcessor));
+        vm.assume(nonWard != address(hub));
+
+        assertEq(multiAdapter.wards(address(root)), 1);
+        assertEq(multiAdapter.wards(address(opsGuardian)), 1);
+        assertEq(multiAdapter.wards(address(gateway)), 1);
+        assertEq(multiAdapter.wards(address(messageDispatcher)), 1);
+        assertEq(multiAdapter.wards(address(messageProcessor)), 1);
+        assertEq(multiAdapter.wards(address(hub)), 1);
+        assertEq(multiAdapter.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(multiAdapter.gateway()), address(gateway));
+        assertEq(address(multiAdapter.parser()), address(messageProcessor));
+        assertEq(multiAdapter.localCentrifugeId(), CENTRIFUGE_ID);
+
+        // Nothing in either contract enforces it, but the two must agree: the Gateway checks a message
+        // against the source its processor requires, while MultiAdapter verifies it against the adapter set
+        // its parser routes it to. Filed apart, a message could be routed by one framing and checked by another.
+        assertEq(
+            address(multiAdapter.parser()),
+            address(gateway.processor()),
+            "MultiAdapter.parser and Gateway.processor must be the same contract"
+        );
+
+        // The same again for what prices execution: an adapter reads it off MultiAdapter to price its own
+        // receive path, and Gateway reads it to size the message. Filed apart, an adapter would reserve
+        // against one schedule while the message was budgeted against another.
+        assertEq(address(multiAdapter.messageGas()), address(gasService));
+        assertEq(
+            address(multiAdapter.messageGas()),
+            address(gateway.messageGas()),
+            "MultiAdapter.messageGas and Gateway.messageGas must be the same contract"
+        );
+    }
+
+    function testGasService() public pure {
+        // Nothing to check
+    }
+
+    function testMessageDispatcher(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(protocolGuardian));
+        vm.assume(nonWard != address(spoke));
+        vm.assume(nonWard != address(hub));
+        vm.assume(nonWard != address(hubHandler));
+
+        assertEq(messageDispatcher.wards(address(root)), 1);
+        assertEq(messageDispatcher.wards(address(protocolGuardian)), 1);
+        assertEq(messageDispatcher.wards(address(spoke)), 1);
+        assertEq(messageDispatcher.wards(address(hub)), 1);
+        assertEq(messageDispatcher.wards(address(hubHandler)), 1);
+        assertEq(messageDispatcher.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(messageDispatcher.localCentrifugeId(), CENTRIFUGE_ID);
+        assertEq(address(messageDispatcher.scheduleAuth()), address(root));
+        assertEq(address(messageDispatcher.gateway()), address(gateway));
+        assertEq(address(messageDispatcher.spokeHandler()), address(spokeHandler));
+        assertEq(address(messageDispatcher.multiAdapter()), address(multiAdapter));
+        assertEq(address(messageDispatcher.hubHandler()), address(hubHandler));
+    }
+
+    function testMessageProcessor(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(gateway));
+
+        assertEq(messageProcessor.wards(address(root)), 1);
+        assertEq(messageProcessor.wards(address(gateway)), 1);
+        assertEq(messageProcessor.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(messageProcessor.scheduleAuth()), address(root));
+        assertEq(address(messageProcessor.gateway()), address(gateway));
+        assertEq(address(messageProcessor.spokeHandler()), address(spokeHandler));
+        assertEq(address(messageProcessor.multiAdapter()), address(multiAdapter));
+        assertEq(address(messageProcessor.hubHandler()), address(hubHandler));
+    }
+
+    function testSpokeRegistry(address nonWard) public view {
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(spokeHandler));
+        vm.assume(nonWard != address(spoke));
+
+        assertEq(spokeRegistry.wards(address(root)), 1);
+        assertEq(spokeRegistry.wards(address(spokeHandler)), 1);
+        assertEq(spokeRegistry.wards(address(spoke)), 1);
+        assertEq(spokeRegistry.wards(nonWard), 0);
+    }
+
+    function testSpokeHandler(address nonWard) public view {
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(messageProcessor));
+        vm.assume(nonWard != address(messageDispatcher));
+
+        assertEq(spokeHandler.wards(address(root)), 1);
+        assertEq(spokeHandler.wards(address(messageProcessor)), 1);
+        assertEq(spokeHandler.wards(address(messageDispatcher)), 1);
+        assertEq(spokeHandler.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(spokeHandler.spokeRegistry()), address(spokeRegistry));
+        assertEq(address(spokeHandler.escrowFactory()), address(escrowFactory));
+
+        // root endorsements
+        assertEq(root.endorsed(address(spokeHandler)), true);
+    }
+
+    function testSpoke(address nonWard) public view {
+        vm.assume(nonWard != address(root));
+
+        assertEq(spoke.wards(address(root)), 1);
+        assertEq(spoke.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(spoke.spokeRegistry()), address(spokeRegistry));
+        assertEq(address(spoke.sender()), address(messageDispatcher));
+        assertEq(address(spoke.snapshotQueue()), address(snapshotQueue));
+        assertEq(address(spoke.escrowProvider()), address(escrowFactory));
+
+        // root endorsements
+        assertEq(root.endorsed(address(spoke)), true);
+    }
+
+    function testQueues(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(spoke));
+
+        assertEq(snapshotQueue.wards(address(root)), 1);
+        assertEq(snapshotQueue.wards(address(spoke)), 1);
+        assertEq(snapshotQueue.wards(nonWard), 0);
+    }
+
+    function testEscrowFactory(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(spokeHandler));
+
+        assertEq(escrowFactory.wards(address(root)), 1);
+        assertEq(escrowFactory.wards(address(spokeHandler)), 1);
+        assertEq(escrowFactory.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(escrowFactory.root()), address(root));
+        assertEq(address(escrowFactory.spoke()), address(spoke));
+    }
+
+    function testShareTokenRegistrar(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(spokeHandler));
+        vm.assume(nonWard != address(spoke));
+
+        assertEq(shareTokenRegistrar.wards(address(root)), 1);
+        assertEq(shareTokenRegistrar.wards(address(spokeHandler)), 1);
+        assertEq(shareTokenRegistrar.wards(address(spoke)), 1);
+        assertEq(shareTokenRegistrar.wards(address(spokeRegistry)), 0);
+        assertEq(shareTokenRegistrar.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(shareTokenRegistrar.root()), address(root));
+        assertEq(address(shareTokenRegistrar.envoy()), address(envoy));
+        assertEq(address(shareTokenRegistrar.spokeRegistry()), address(spokeRegistry));
+    }
+
+    function testEnvoy(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(messageDispatcher));
+        vm.assume(nonWard != address(messageProcessor));
+
+        assertEq(envoy.wards(address(root)), 1);
+        assertEq(envoy.wards(address(messageDispatcher)), 1);
+        assertEq(envoy.wards(address(messageProcessor)), 1);
+        assertEq(envoy.wards(nonWard), 0);
+    }
+
+    function testHub(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(opsGuardian));
+        vm.assume(nonWard != address(hubHandler));
+        vm.assume(nonWard != address(messageProcessor));
+        vm.assume(nonWard != address(messageDispatcher));
+
+        assertEq(hub.wards(address(root)), 1);
+        assertEq(hub.wards(address(hubHandler)), 1);
+        assertEq(hub.wards(address(opsGuardian)), 1);
+        assertEq(hub.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(hub.hubRegistry()), address(hubRegistry));
+        assertEq(address(hub.gateway()), address(gateway));
+        assertEq(address(hub.holdings()), address(holdings));
+        assertEq(address(hub.accounting()), address(accounting));
+        assertEq(address(hub.multiAdapter()), address(multiAdapter));
+        assertEq(address(hub.shareClassManager()), address(shareClassManager));
+        assertEq(address(hub.sender()), address(messageDispatcher));
+    }
+
+    function testHubHandler(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(messageProcessor));
+        vm.assume(nonWard != address(messageDispatcher));
+
+        assertEq(hubHandler.wards(address(root)), 1);
+        assertEq(hubHandler.wards(address(messageProcessor)), 1);
+        assertEq(hubHandler.wards(address(messageDispatcher)), 1);
+        assertEq(hubHandler.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(hubHandler.hub()), address(hub));
+        assertEq(address(hubHandler.holdings()), address(holdings));
+        assertEq(address(hubHandler.hubRegistry()), address(hubRegistry));
+        assertEq(address(hubHandler.shareClassManager()), address(shareClassManager));
+    }
+
+    function testHubRegistry(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(hub));
+        vm.assume(nonWard != address(hubHandler));
+
+        assertEq(hubRegistry.wards(address(root)), 1);
+        assertEq(hubRegistry.wards(address(hub)), 1);
+        assertEq(hubRegistry.wards(address(hubHandler)), 1);
+        assertEq(hubRegistry.wards(nonWard), 0);
+
+        // initial values set correctly
+        _assertCurrenciesRegistered();
+    }
+
+    function testShareClassManager(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(hub));
+        vm.assume(nonWard != address(hubHandler));
+
+        assertEq(shareClassManager.wards(address(root)), 1);
+        assertEq(shareClassManager.wards(address(hub)), 1);
+        assertEq(shareClassManager.wards(address(hubHandler)), 1);
+        assertEq(shareClassManager.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(shareClassManager.hubRegistry()), address(hubRegistry));
+    }
+
+    function testHoldings(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(hub));
+        vm.assume(nonWard != address(hubHandler));
+
+        assertEq(holdings.wards(address(root)), 1);
+        assertEq(holdings.wards(address(hub)), 1);
+        assertEq(holdings.wards(address(hubHandler)), 1);
+        assertEq(holdings.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(holdings.hubRegistry()), address(hubRegistry));
+    }
+
+    function testAccounting(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(hub));
+
+        assertEq(accounting.wards(address(root)), 1);
+        assertEq(accounting.wards(address(hub)), 1);
+        assertEq(accounting.wards(nonWard), 0);
+    }
+}
+
+contract FullDeploymentTestNonCore is FullDeploymentConfigTest {
+    function testRoot(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(protocolGuardian));
+        vm.assume(nonWard != address(messageProcessor));
+        vm.assume(nonWard != address(messageDispatcher));
+
+        assertEq(root.wards(address(protocolGuardian)), 1);
+        assertEq(root.wards(address(messageProcessor)), 1);
+        assertEq(root.wards(address(messageDispatcher)), 1);
+        assertEq(root.wards(nonWard), 0);
+    }
+
+    function testProtocolGuardian() public view {
+        // dependencies set correctly
+        assertEq(address(protocolGuardian.root()), address(root));
+        assertEq(address(protocolGuardian.safe()), address(ADMIN_SAFE));
+        assertEq(address(protocolGuardian.sender()), address(messageDispatcher));
+        assertEq(address(protocolGuardian.tokenBridge()), address(tokenBridge));
+    }
+
+    function testOpsGuardian() public view {
+        // dependencies set correctly
+        assertEq(address(opsGuardian.opsSafe()), address(OPS_SAFE));
+        assertEq(address(opsGuardian.multiAdapter()), address(multiAdapter));
+        assertEq(address(opsGuardian.hub()), address(hub));
+        assertEq(address(opsGuardian.tokenBridge()), address(tokenBridge));
+    }
+
+    function testSubsidyManager(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+
+        assertEq(subsidyManager.wards(address(root)), 1);
+        assertEq(subsidyManager.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(subsidyManager.refundEscrowFactory()), address(refundEscrowFactory));
+        assertEq(subsidyManager.envoy(), address(envoy));
+    }
+
+    function testRefundEscrowFactory(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(subsidyManager));
+
+        assertEq(refundEscrowFactory.wards(address(root)), 1);
+        assertEq(refundEscrowFactory.wards(address(subsidyManager)), 1);
+        assertEq(refundEscrowFactory.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(refundEscrowFactory.controller()), address(subsidyManager));
+        assertEq(refundEscrowFactory.root(), address(root));
+    }
+
+    function testFreezeOnly(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(shareTokenRegistrar));
+
+        assertEq(freezeOnlyHook.wards(address(root)), 1);
+        assertEq(freezeOnlyHook.wards(address(shareTokenRegistrar)), 1);
+        assertEq(freezeOnlyHook.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(freezeOnlyHook.root()), address(root));
+        assertEq(freezeOnlyHook.envoy(), address(envoy));
+        assertEq(address(freezeOnlyHook.escrowProvider()), address(escrowFactory));
+        assertFalse(freezeOnlyHook.isEscrow(nonWard));
+    }
+
+    function testRedemptionRestriction(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(shareTokenRegistrar));
+
+        assertEq(redemptionRestrictionsHook.wards(address(root)), 1);
+        assertEq(redemptionRestrictionsHook.wards(address(shareTokenRegistrar)), 1);
+        assertEq(redemptionRestrictionsHook.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(redemptionRestrictionsHook.root()), address(root));
+        assertEq(redemptionRestrictionsHook.envoy(), address(envoy));
+        assertEq(address(redemptionRestrictionsHook.escrowProvider()), address(escrowFactory));
+        assertFalse(redemptionRestrictionsHook.isEscrow(nonWard));
+    }
+
+    function testFreelyTransferable(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(shareTokenRegistrar));
+
+        assertEq(freelyTransferableHook.wards(address(root)), 1);
+        assertEq(freelyTransferableHook.wards(address(shareTokenRegistrar)), 1);
+        assertEq(freelyTransferableHook.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(freelyTransferableHook.root()), address(root));
+        assertEq(freelyTransferableHook.envoy(), address(envoy));
+        assertEq(address(freelyTransferableHook.escrowProvider()), address(escrowFactory));
+        assertFalse(freelyTransferableHook.isEscrow(nonWard));
+    }
+
+    function testFullRestriction(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(shareTokenRegistrar));
+
+        assertEq(fullRestrictionsHook.wards(address(root)), 1);
+        assertEq(fullRestrictionsHook.wards(address(shareTokenRegistrar)), 1);
+        assertEq(fullRestrictionsHook.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(fullRestrictionsHook.root()), address(root));
+        assertEq(fullRestrictionsHook.envoy(), address(envoy));
+        assertEq(address(fullRestrictionsHook.escrowProvider()), address(escrowFactory));
+        assertFalse(fullRestrictionsHook.isEscrow(nonWard));
+    }
+
+    function testOnOffRampFactory() public view {
+        // dependencies set correctly
+        assertEq(address(onOffRampFactory.envoy()), address(envoy));
+        assertEq(address(onOffRampFactory.spoke()), address(spoke));
+        assertEq(address(onOffRampFactory.accountingToken()), address(accountingToken));
+    }
+
+    function testShareManager() public view {
+        // dependencies set correctly
+        assertEq(address(shareManager.envoy()), address(envoy));
+        assertEq(address(shareManager.spoke()), address(spoke));
+        assertEq(address(shareManager.spokeRegistry()), address(spokeRegistry));
+
+        // root endorsements
+        assertEq(root.endorsed(address(shareManager)), true);
+    }
+
+    function testQueueManager() public view {
+        // dependencies set correctly
+        assertEq(address(queueManager.envoy()), address(envoy));
+        assertEq(address(queueManager.spoke()), address(spoke));
+        assertEq(address(queueManager.gateway()), address(gateway));
+    }
+
+    function testIdentityValuation() public view {
+        // dependencies set correctly
+        assertEq(address(identityValuation.hubRegistry()), address(hubRegistry));
+    }
+
+    function testOracleValuation() public view {
+        // dependencies set correctly
+        assertEq(address(oracleValuation.hubRegistry()), address(hubRegistry));
+        assertEq(address(oracleValuation.hub()), address(hub));
+        assertEq(oracleValuation.envoy(), address(envoy));
+    }
+
+    function testNavManager() public view {
+        // dependencies set correctly
+        assertEq(address(navManager.hub()), address(hub));
+        assertEq(address(navManager.holdings()), address(holdings));
+        assertEq(navManager.envoy(), address(envoy));
+    }
+
+    function testSimplePriceManager() public view {
+        // dependencies set correctly
+        assertEq(address(simplePriceManager.navUpdater()), address(navManager));
+
+        // dependencies set correctly
+        assertEq(address(simplePriceManager.hub()), address(hub));
+    }
+
+    function testOnchainPMFactory() public view {
+        // dependencies set correctly
+        assertEq(onchainPMFactory.envoy(), address(envoy));
+        assertEq(address(onchainPMFactory.spoke()), address(spoke));
+        assertEq(address(onchainPMFactory.gateway()), address(gateway));
+    }
+
+    function testScriptHelpers() public view {
+        // contract deployed
+        assertTrue(address(scriptHelpers).code.length > 0);
+    }
+
+    function testFlashLoanHelper() public view {
+        // contract deployed
+        assertTrue(address(flashLoanHelper).code.length > 0);
+    }
+
+    function testApprovalGuard() public view {
+        // contract deployed
+        assertTrue(address(approvalGuard).code.length > 0);
+    }
+
+    function testCircuitBreakerGuard() public view {
+        // contract deployed
+        assertTrue(address(circuitBreakerGuard).code.length > 0);
+    }
+
+    function testBridgeCircuitBreaker() public view {
+        // dependencies set correctly
+        assertEq(bridgeCircuitBreaker.envoy(), address(envoy));
+        assertEq(bridgeCircuitBreaker.wards(address(hubHandler)), 1);
+        assertEq(address(bridgeCircuitBreaker.circuitBreakerGuard()), address(circuitBreakerGuard));
+    }
+
+    function testVaultFactory() public view {
+        // dependencies set correctly
+        assertEq(vaultFactory.root(), address(root));
+        assertEq(address(vaultFactory.spoke()), address(spoke));
+        assertEq(address(vaultFactory.spokeRegistry()), address(spokeRegistry));
+    }
+
+    function testVaultRequestRouter(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(spokeHandler));
+
+        assertEq(vaultRequestRouter.wards(address(root)), 1);
+        assertEq(vaultRequestRouter.wards(address(spokeHandler)), 1);
+        assertEq(vaultRequestRouter.wards(address(nonCoreBatcher)), 0);
+        assertEq(vaultRequestRouter.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(vaultRequestRouter.spoke()), address(spoke));
+        assertEq(address(vaultRequestRouter.spokeRegistry()), address(spokeRegistry));
+        assertEq(address(vaultRequestRouter.subsidyManager()), address(subsidyManager));
+        assertEq(vaultRequestRouter.envoy(), address(envoy));
+
+        // it withdraws the message subsidy of the pools it forwards requests for
+        assertEq(subsidyManager.wards(address(vaultRequestRouter)), 1);
+    }
+
+    function testVaultRouter(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+
+        assertEq(vaultRouter.wards(address(root)), 1);
+        assertEq(vaultRouter.wards(address(nonCoreBatcher)), 0);
+        assertEq(vaultRouter.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(vaultRouter.spoke()), address(spoke));
+        assertEq(address(vaultRouter.spokeRegistry()), address(spokeRegistry));
+
+        // an endorsed operator of the vaults, and a holder of shares mid-batch
+        assertEq(root.endorsed(address(vaultRouter)), true);
+    }
+
+    function testOrderBook(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(hubHandler));
+
+        assertEq(orderBook.wards(address(root)), 1);
+        assertEq(orderBook.wards(address(hubHandler)), 1);
+        assertEq(orderBook.wards(address(nonCoreBatcher)), 0);
+        assertEq(orderBook.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(orderBook.hub()), address(hub));
+        assertEq(address(orderBook.hubRegistry()), address(hubRegistry));
+        assertEq(address(orderBook.gateway()), address(gateway));
+        assertEq(orderBook.envoy(), address(envoy));
+    }
+
+    function testFeeRequestManager() public view {
+        // dependencies set correctly
+        assertEq(address(feeRequestManager.hub()), address(hub));
+        assertEq(address(feeRequestManager.orderBook()), address(orderBook));
+        assertEq(feeRequestManager.envoy(), address(envoy));
+        assertEq(feeRequestManager.localCentrifugeId(), CENTRIFUGE_ID);
+    }
+
+    function testSpokeOracle() public view {
+        // dependencies set correctly
+        assertEq(address(spokeOracle.spokeRegistry()), address(spokeRegistry));
+        assertEq(spokeOracle.envoy(), address(envoy));
+        assertEq(spokeOracle.maxAge(), 1 days);
+        assertEq(spokeOracle.maxSkew(), 1 days);
+    }
+
+    function testRequestPolicies() public view {
+        assertFalse(perRequestPolicy.supportsTransfers(), "the default per-request policy is closed-access");
+        assertTrue(transferablePerRequestPolicy.supportsTransfers());
+        assertTrue(address(perInvestorPolicy).code.length > 0);
+        assertEq(perPeriodPolicy.window(), 1 days);
+        assertEq(perPeriodPolicy.offset(), 0);
+
+        assertEq(perRequestPolicy.maxOpenBuckets(), 1);
+        assertEq(transferablePerRequestPolicy.maxOpenBuckets(), 1);
+        assertEq(perInvestorPolicy.maxOpenBuckets(), 1);
+        assertEq(perPeriodPolicy.maxOpenBuckets(), 1);
+    }
+
+    function testReserveInstantPolicy() public view {
+        // dependencies set correctly
+        assertEq(address(reserveInstantPolicy.spoke()), address(spoke));
+        assertEq(address(reserveInstantPolicy.spokeRegistry()), address(spokeRegistry));
+        assertEq(reserveInstantPolicy.envoy(), address(envoy));
+    }
+
+    function testVaultLiquidityRoute() public view {
+        // dependencies set correctly
+        assertEq(address(vaultLiquidityRoute.spoke()), address(spoke));
+        assertEq(vaultLiquidityRoute.envoy(), address(envoy));
+        assertEq(vaultLiquidityRoute.wards(address(root)), 1);
+    }
+
+    function testSlippageGuard() public view {
+        // dependencies set correctly
+        assertEq(address(slippageGuard.spoke()), address(spoke));
+        assertEq(slippageGuard.envoy(), address(envoy));
+        assertEq(address(slippageGuard.onchainPMFactory()), address(onchainPMFactory));
+    }
+}
+
+contract FullDeploymentTestAdapters is FullDeploymentConfigTest {
+    /// @dev The launch wires no connections, so the OpsGuardian may wire each adapter once per chain and is
+    ///      then frozen for that binding. Re-pointing it is a spell's, through Root.
+    function testOpsWiresOnceThenRootRepoints() public {
+        uint16 remoteCentrifugeId = 5;
+        address remoteAdapter = makeAddr("RemoteLayerZeroAdapter");
+        address rotatedRemoteAdapter = makeAddr("RotatedRemoteLayerZeroAdapter");
+        bytes memory data = abi.encode(uint32(30_005), remoteAdapter);
+
+        assertEq(layerZeroAdapter.isWired(remoteCentrifugeId, data), false);
+
+        vm.startPrank(address(OPS_SAFE));
+        opsGuardian.wire(layerZeroAdapter, remoteCentrifugeId, data);
+        assertEq(layerZeroAdapter.isWired(remoteCentrifugeId, data), true);
+
+        vm.expectRevert(IOpsGuardian.AdapterAlreadyWired.selector);
+        opsGuardian.wire(layerZeroAdapter, remoteCentrifugeId, data);
+
+        // A different adapter is a different binding, so it is still wireable for the same chain
+        opsGuardian.wire(hyperlaneAdapter, remoteCentrifugeId, data);
+        assertEq(hyperlaneAdapter.isWired(remoteCentrifugeId, data), true);
+
+        // A bridge id that already serves a chain cannot be handed to another chain by a first-time wire
+        uint16 mainnetCentrifugeId = opsGuardian.MAINNET_CENTRIFUGE_ID();
+        vm.expectRevert(IOpsGuardian.AdapterAlreadyWired.selector);
+        opsGuardian.wire(layerZeroAdapter, mainnetCentrifugeId, data);
+
+        // Ethereum is a remote chain like any other for wiring; the local chain is not
+        opsGuardian.wire(layerZeroAdapter, mainnetCentrifugeId, abi.encode(uint32(30_101), remoteAdapter));
+        vm.expectRevert(IOpsGuardian.CannotWireLocalChain.selector);
+        opsGuardian.wire(layerZeroAdapter, CENTRIFUGE_ID, data);
+
+        // Re-pointing an existing binding is no longer a guardian call: it goes through Root, which is what a
+        // spell holds while it executes.
+        vm.startPrank(address(root));
+        layerZeroAdapter.wire(remoteCentrifugeId, abi.encode(uint32(30_005), rotatedRemoteAdapter));
+        (, address destination) = layerZeroAdapter.destinations(remoteCentrifugeId);
+        assertEq(destination, rotatedRemoteAdapter);
+    }
+
+    function testAxelarAdapter(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(opsGuardian));
+        vm.assume(nonWard != address(protocolGuardian));
+
+        assertEq(axelarAdapter.wards(address(root)), 1);
+        assertEq(axelarAdapter.wards(address(opsGuardian)), 1);
+        // No ward: re-pointing a wired adapter is a spell, through Root, not a guardian call
+        assertEq(axelarAdapter.wards(address(protocolGuardian)), 0);
+        assertEq(axelarAdapter.wards(address(ADMIN_SAFE)), 0);
+        assertEq(axelarAdapter.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(axelarAdapter.entrypoint()), address(multiAdapter));
+        assertEq(address(axelarAdapter.axelarGateway()), AXELAR_GATEWAY);
+        assertEq(address(axelarAdapter.axelarGasService()), AXELAR_GAS_SERVICE);
+    }
+
+    function testLayerZeroAdapter(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(opsGuardian));
+        vm.assume(nonWard != address(protocolGuardian));
+        vm.assume(nonWard != address(ADMIN_SAFE));
+
+        assertEq(layerZeroAdapter.wards(address(root)), 1);
+        assertEq(layerZeroAdapter.wards(address(opsGuardian)), 1);
+        // No ward: re-pointing a wired adapter is a spell, through Root, not a guardian call
+        assertEq(layerZeroAdapter.wards(address(protocolGuardian)), 0);
+        assertEq(layerZeroAdapter.wards(address(ADMIN_SAFE)), 1);
+        assertEq(layerZeroAdapter.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(layerZeroAdapter.entrypoint()), address(multiAdapter));
+        assertEq(address(layerZeroAdapter.endpoint()), LAYERZERO_ENDPOINT);
+        assertEq(
+            address(
+                ILayerZeroEndpointV2Like(address(layerZeroAdapter.endpoint())).delegates(address(layerZeroAdapter))
+            ),
+            LAYERZERO_DELEGATE
+        );
+    }
+
+    function testChainlinkAdapter(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(opsGuardian));
+        vm.assume(nonWard != address(protocolGuardian));
+
+        assertEq(chainlinkAdapter.wards(address(root)), 1);
+        assertEq(chainlinkAdapter.wards(address(opsGuardian)), 1);
+        // No ward: re-pointing a wired adapter is a spell, through Root, not a guardian call
+        assertEq(chainlinkAdapter.wards(address(protocolGuardian)), 0);
+        assertEq(chainlinkAdapter.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(chainlinkAdapter.ccipRouter()), CHAINLINK_CCIP_ROUTER);
+    }
+
+    function testTokenBridge(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(protocolGuardian));
+        vm.assume(nonWard != address(opsGuardian));
+
+        assertEq(tokenBridge.wards(address(root)), 1);
+        assertEq(tokenBridge.wards(address(protocolGuardian)), 1);
+        assertEq(tokenBridge.wards(address(opsGuardian)), 1);
+        assertEq(tokenBridge.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(tokenBridge.spoke()), address(spoke));
+        assertEq(address(tokenBridge.gateway()), address(gateway));
+        assertEq(address(tokenBridge.envoy()), address(envoy));
+        assertEq(address(opsGuardian.tokenBridge()), address(tokenBridge));
+
+        // root endorsements
+        assertEq(root.endorsed(address(tokenBridge)), true);
+    }
+
+    function testHyperlaneAdapter(address nonWard) public view {
+        // permissions set correctly
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(opsGuardian));
+        vm.assume(nonWard != address(protocolGuardian));
+        vm.assume(nonWard != address(ADMIN_SAFE));
+
+        assertEq(hyperlaneAdapter.wards(address(root)), 1);
+        assertEq(hyperlaneAdapter.wards(address(opsGuardian)), 1);
+        // No ward: re-pointing a wired adapter is a spell, through Root, not a guardian call
+        assertEq(hyperlaneAdapter.wards(address(protocolGuardian)), 0);
+        assertEq(hyperlaneAdapter.wards(address(ADMIN_SAFE)), 1);
+        assertEq(hyperlaneAdapter.wards(nonWard), 0);
+
+        // dependencies set correctly
+        assertEq(address(hyperlaneAdapter.entrypoint()), address(multiAdapter));
+        assertEq(address(hyperlaneAdapter.mailbox()), HYPERLANE_MAILBOX);
+        assertEq(address(hyperlaneAdapter.interchainSecurityModule()), HYPERLANE_ISM);
+    }
+
+    /// @dev Each standby wraps an instance of its bridge of its own, whose entrypoint is the standby and
+    ///      whose wards are the global adapter's
+    function testStandbyAdapters(address nonWard) public view {
+        vm.assume(nonWard != address(root));
+        vm.assume(nonWard != address(opsGuardian));
+        vm.assume(nonWard != address(ADMIN_SAFE));
+
+        LayerZeroAdapter layerZeroStandbyUnderlying = LayerZeroAdapter(address(layerZeroStandby.underlying()));
+        AxelarAdapter axelarStandbyUnderlying = AxelarAdapter(address(axelarStandby.underlying()));
+        ChainlinkAdapter chainlinkStandbyUnderlying = ChainlinkAdapter(address(chainlinkStandby.underlying()));
+        HyperlaneAdapter hyperlaneStandbyUnderlying = HyperlaneAdapter(address(hyperlaneStandby.underlying()));
+
+        // permissions set correctly: the same the global adapter of each bridge has
+        assertEq(layerZeroStandbyUnderlying.wards(address(root)), 1);
+        assertEq(layerZeroStandbyUnderlying.wards(address(opsGuardian)), 1);
+        assertEq(layerZeroStandbyUnderlying.wards(address(ADMIN_SAFE)), 1);
+        assertEq(layerZeroStandbyUnderlying.wards(address(protocolGuardian)), 0);
+        assertEq(layerZeroStandbyUnderlying.wards(nonWard), 0);
+
+        assertEq(axelarStandbyUnderlying.wards(address(root)), 1);
+        assertEq(axelarStandbyUnderlying.wards(address(opsGuardian)), 1);
+        assertEq(axelarStandbyUnderlying.wards(address(ADMIN_SAFE)), 0);
+        assertEq(axelarStandbyUnderlying.wards(address(protocolGuardian)), 0);
+        assertEq(axelarStandbyUnderlying.wards(nonWard), 0);
+
+        assertEq(chainlinkStandbyUnderlying.wards(address(root)), 1);
+        assertEq(chainlinkStandbyUnderlying.wards(address(opsGuardian)), 1);
+        assertEq(chainlinkStandbyUnderlying.wards(address(ADMIN_SAFE)), 0);
+        assertEq(chainlinkStandbyUnderlying.wards(address(protocolGuardian)), 0);
+        assertEq(chainlinkStandbyUnderlying.wards(nonWard), 0);
+
+        assertEq(hyperlaneStandbyUnderlying.wards(address(root)), 1);
+        assertEq(hyperlaneStandbyUnderlying.wards(address(opsGuardian)), 1);
+        assertEq(hyperlaneStandbyUnderlying.wards(address(ADMIN_SAFE)), 1);
+        assertEq(hyperlaneStandbyUnderlying.wards(address(protocolGuardian)), 0);
+        assertEq(hyperlaneStandbyUnderlying.wards(nonWard), 0);
+
+        // dependencies set correctly: the standby faces the MultiAdapter, and its underlying faces the standby
+        assertEq(address(layerZeroStandby.entrypoint()), address(multiAdapter));
+        assertEq(address(axelarStandby.entrypoint()), address(multiAdapter));
+        assertEq(address(chainlinkStandby.entrypoint()), address(multiAdapter));
+        assertEq(address(hyperlaneStandby.entrypoint()), address(multiAdapter));
+
+        assertEq(address(layerZeroStandbyUnderlying.entrypoint()), address(layerZeroStandby));
+        assertEq(address(axelarStandbyUnderlying.entrypoint()), address(axelarStandby));
+        assertEq(address(chainlinkStandbyUnderlying.entrypoint()), address(chainlinkStandby));
+        assertEq(address(hyperlaneStandbyUnderlying.entrypoint()), address(hyperlaneStandby));
+
+        // Over the same bridge as the global adapter, and a contract of its own
+        assertNotEq(address(layerZeroStandbyUnderlying), address(layerZeroAdapter));
+        assertNotEq(address(axelarStandbyUnderlying), address(axelarAdapter));
+        assertNotEq(address(chainlinkStandbyUnderlying), address(chainlinkAdapter));
+        assertNotEq(address(hyperlaneStandbyUnderlying), address(hyperlaneAdapter));
+
+        assertEq(address(layerZeroStandbyUnderlying.endpoint()), LAYERZERO_ENDPOINT);
+        assertEq(address(axelarStandbyUnderlying.axelarGateway()), AXELAR_GATEWAY);
+        assertEq(address(axelarStandbyUnderlying.axelarGasService()), AXELAR_GAS_SERVICE);
+        assertEq(address(chainlinkStandbyUnderlying.ccipRouter()), CHAINLINK_CCIP_ROUTER);
+        assertEq(address(hyperlaneStandbyUnderlying.mailbox()), HYPERLANE_MAILBOX);
+
+        // Configured as the global adapters are: the delegate, and an ISM of its own rather than the
+        // Mailbox default
+        assertEq(
+            ILayerZeroEndpointV2Like(LAYERZERO_ENDPOINT).delegates(address(layerZeroStandbyUnderlying)),
+            LAYERZERO_DELEGATE
+        );
+        assertEq(address(hyperlaneStandbyUnderlying.interchainSecurityModule()), HYPERLANE_ISM);
+    }
+
+    function testAdapterFailover() public view {
+        assertEq(address(adapterFailover.multiAdapter()), address(multiAdapter));
+        assertEq(adapterFailover.envoy(), address(envoy));
+        assertEq(adapterFailover.timelock(), uint64(MAINNET_DELAY));
+    }
+}
+
+/// @dev A launch with a connection: the global set is the bridge adapters alone, and the standbys are wired to
+///      their peer standby underlyings with the same LayerZero config
+contract FullDeploymentTestAdapterConnections is FullDeploymentConfigTest {
+    uint16 constant REMOTE_CENTRIFUGE_ID = 5;
+    uint32 constant REMOTE_LAYERZERO_ID = 30_005;
+    bytes constant ULN_CONFIG = hex"c0ffee";
+
+    function setUp() public override {
+        connections_.push(
+            AdapterConnections({
+                centrifugeId: REMOTE_CENTRIFUGE_ID,
+                layerZeroId: REMOTE_LAYERZERO_ID,
+                axelarId: "remote",
+                chainlinkId: 5_000,
+                hyperlaneId: 5,
+                threshold: 2,
+                layerZeroWiredOnly: false,
+                axelarWiredOnly: false,
+                chainlinkWiredOnly: false,
+                hyperlaneWiredOnly: false
+            })
+        );
+        layerZeroConfigParams_.push(SetConfigParam({eid: REMOTE_LAYERZERO_ID, configType: 2, config: ULN_CONFIG}));
+        super.setUp();
+    }
+
+    /// @dev Mirrored onto the standby's underlying, so that a pool taking it up verifies with the protocol's
+    ///      libraries and DVNs rather than LayerZero's defaults
+    function testLayerZeroConfigMirroredOnStandby() public view {
+        LayerZeroEndpointMock endpoint = LayerZeroEndpointMock(LAYERZERO_ENDPOINT);
+        address[2] memory oapps = [address(layerZeroAdapter), address(layerZeroStandby.underlying())];
+
+        for (uint256 i; i < oapps.length; i++) {
+            assertEq(endpoint.sendLibraries(oapps[i], REMOTE_LAYERZERO_ID), endpoint.sendLib());
+            assertEq(endpoint.receiveLibraries(oapps[i], REMOTE_LAYERZERO_ID), endpoint.receiveLib());
+            assertEq(endpoint.configs(oapps[i], endpoint.sendLib(), REMOTE_LAYERZERO_ID), ULN_CONFIG);
+            assertEq(endpoint.configs(oapps[i], endpoint.receiveLib(), REMOTE_LAYERZERO_ID), ULN_CONFIG);
+            assertEq(endpoint.delegates(oapps[i]), LAYERZERO_DELEGATE);
+        }
+    }
+
+    function testGlobalSetHoldsNoStandby() public view {
+        assertEq(multiAdapter.quorum(REMOTE_CENTRIFUGE_ID, PoolId.wrap(0)), 4);
+        assertEq(multiAdapter.threshold(REMOTE_CENTRIFUGE_ID, PoolId.wrap(0)), 2);
+
+        address[4] memory expected =
+            [address(layerZeroAdapter), address(axelarAdapter), address(chainlinkAdapter), address(hyperlaneAdapter)];
+        for (uint256 i; i < expected.length; i++) {
+            assertEq(address(multiAdapter.adapters(REMOTE_CENTRIFUGE_ID, PoolId.wrap(0), 1, i)), expected[i]);
+        }
+    }
+
+    // Each standby underlying is wired to every lane its global adapter is, and to the peer's standby
+    // underlying rather than its global adapter, so a forwarded vote lands on the standby at the other end
+
+    function testLayerZeroStandbyWiredToItsPeer() public view {
+        LayerZeroAdapter lz = LayerZeroAdapter(address(layerZeroStandby.underlying()));
+        (uint32 eid, address peer) = lz.destinations(REMOTE_CENTRIFUGE_ID);
+        (uint16 source, address sourcePeer) = lz.sources(REMOTE_LAYERZERO_ID);
+        assertEq(eid, REMOTE_LAYERZERO_ID);
+        assertEq(peer, address(lz), "the peer's standby underlying");
+        assertEq(source, REMOTE_CENTRIFUGE_ID);
+        assertEq(sourcePeer, address(lz));
+    }
+
+    function testAxelarStandbyWiredToItsPeer() public view {
+        AxelarAdapter axelar = AxelarAdapter(address(axelarStandby.underlying()));
+        string memory expected = vm.toString(address(axelar));
+        (string memory axelarId, string memory peer) = axelar.destinations(REMOTE_CENTRIFUGE_ID);
+        (uint16 source, bytes32 sourcePeer) = axelar.sources("remote");
+        assertEq(axelarId, "remote");
+        assertEq(peer, expected, "the peer's standby underlying");
+        assertEq(source, REMOTE_CENTRIFUGE_ID);
+        assertEq(sourcePeer, keccak256(bytes(expected)));
+    }
+
+    function testChainlinkStandbyWiredToItsPeer() public view {
+        ChainlinkAdapter chainlink = ChainlinkAdapter(address(chainlinkStandby.underlying()));
+        (uint64 selector, address peer,) = chainlink.destinations(REMOTE_CENTRIFUGE_ID);
+        (uint16 source, address sourcePeer,) = chainlink.sources(5_000);
+        assertEq(selector, 5_000);
+        assertEq(peer, address(chainlink), "the peer's standby underlying");
+        assertEq(source, REMOTE_CENTRIFUGE_ID);
+        assertEq(sourcePeer, address(chainlink));
+    }
+
+    function testHyperlaneStandbyWiredToItsPeer() public view {
+        HyperlaneAdapter hyperlane = HyperlaneAdapter(address(hyperlaneStandby.underlying()));
+        (uint32 domain, address peer) = hyperlane.destinations(REMOTE_CENTRIFUGE_ID);
+        (uint16 source, address sourcePeer) = hyperlane.sources(5);
+        assertEq(domain, 5);
+        assertEq(peer, address(hyperlane), "the peer's standby underlying");
+        assertEq(source, REMOTE_CENTRIFUGE_ID);
+        assertEq(sourcePeer, address(hyperlane));
+    }
+
+    /// @dev Bound once, by the launch: the OpsGuardian cannot re-point a standby's lane, only Root can
+    function testOpsCannotRewireAStandby() public {
+        LayerZeroAdapter lz = LayerZeroAdapter(address(layerZeroStandby.underlying()));
+        vm.prank(address(OPS_SAFE));
+        vm.expectRevert(IOpsGuardian.AdapterAlreadyWired.selector);
+        opsGuardian.wire(lz, REMOTE_CENTRIFUGE_ID, abi.encode(REMOTE_LAYERZERO_ID, makeAddr("elsewhere")));
+    }
+}
+
+contract FullDeploymentTestAdaptersValidation is FullDeploymentConfigTest {
+    function _mockNonEmptyContract(address contractAddr) internal {
+        vm.etch(contractAddr, SIMPLE_CONTRACT);
+    }
+
+    function _validateAxelarInput(AdaptersInput memory adaptersInput) private view {
+        if (adaptersInput.axelar.shouldDeploy) {
+            require(adaptersInput.axelar.gateway != address(0), "Axelar gateway address cannot be zero");
+            require(adaptersInput.axelar.gasService != address(0), "Axelar gas service address cannot be zero");
+            require(adaptersInput.axelar.gateway.code.length > 0, "Axelar gateway must be a deployed contract");
+            require(adaptersInput.axelar.gasService.code.length > 0, "Axelar gas service must be a deployed contract");
+        }
+    }
+
+    function _validateLayerZeroInput(AdaptersInput memory adaptersInput) private view {
+        if (adaptersInput.layerZero.shouldDeploy) {
+            require(adaptersInput.layerZero.endpoint != address(0), "LayerZero endpoint address cannot be zero");
+            require(adaptersInput.layerZero.endpoint.code.length > 0, "LayerZero endpoint must be a deployed contract");
+            require(adaptersInput.layerZero.delegate != address(0), "LayerZero delegate address cannot be zero");
+        }
+    }
+
+    function _validateChainlinkInput(AdaptersInput memory adaptersInput) private view {
+        if (adaptersInput.chainlink.shouldDeploy) {
+            require(adaptersInput.chainlink.ccipRouter != address(0), "Chainlink ccipRouter address cannot be zero");
+            require(
+                adaptersInput.chainlink.ccipRouter.code.length > 0, "Chainlink ccipRouter must be a deployed contract"
+            );
+        }
+    }
+
+    function testAxelarGatewayZeroAddressFails() public {
+        address validGasService = makeAddr("ValidGasService");
+        _mockNonEmptyContract(validGasService);
+
+        AdaptersInput memory invalidInput = AdaptersInput({
+            axelar: AxelarInput({shouldDeploy: true, gateway: address(0), gasService: validGasService}),
+            layerZero: LayerZeroInput({
+                shouldDeploy: false, endpoint: address(0), delegate: address(0), configParams: new SetConfigParam[](0)
+            }),
+            chainlink: ChainlinkInput({shouldDeploy: false, ccipRouter: address(0)}),
+            hyperlane: HyperlaneInput({shouldDeploy: false, mailbox: address(0), ism: address(0)}),
+            connections: new AdapterConnections[](0)
+        });
+
+        vm.expectRevert("Axelar gateway address cannot be zero");
+        this._validateAxelarInputExternal(invalidInput);
+    }
+
+    function testAxelarGasServiceZeroAddressFails() public {
+        address validGateway = makeAddr("ValidGateway");
+        _mockNonEmptyContract(validGateway);
+
+        AdaptersInput memory invalidInput = AdaptersInput({
+            axelar: AxelarInput({shouldDeploy: true, gateway: validGateway, gasService: address(0)}),
+            layerZero: LayerZeroInput({
+                shouldDeploy: false, endpoint: address(0), delegate: address(0), configParams: new SetConfigParam[](0)
+            }),
+            chainlink: ChainlinkInput({shouldDeploy: false, ccipRouter: address(0)}),
+            hyperlane: HyperlaneInput({shouldDeploy: false, mailbox: address(0), ism: address(0)}),
+            connections: new AdapterConnections[](0)
+        });
+
+        vm.expectRevert("Axelar gas service address cannot be zero");
+        this._validateAxelarInputExternal(invalidInput);
+    }
+
+    function testAxelarGatewayNoCodeFails() public {
+        address mockGateway = makeAddr("MockGatewayNoCode");
+        address mockGasService = makeAddr("MockGasService");
+
+        // Mock code for gas service but not gateway
+        _mockNonEmptyContract(mockGasService);
+
+        AdaptersInput memory invalidInput = AdaptersInput({
+            axelar: AxelarInput({shouldDeploy: true, gateway: mockGateway, gasService: mockGasService}),
+            layerZero: LayerZeroInput({
+                shouldDeploy: false, endpoint: address(0), delegate: address(0), configParams: new SetConfigParam[](0)
+            }),
+            chainlink: ChainlinkInput({shouldDeploy: false, ccipRouter: address(0)}),
+            hyperlane: HyperlaneInput({shouldDeploy: false, mailbox: address(0), ism: address(0)}),
+            connections: new AdapterConnections[](0)
+        });
+
+        vm.expectRevert("Axelar gateway must be a deployed contract");
+        this._validateAxelarInputExternal(invalidInput);
+    }
+
+    function testAxelarGasServiceNoCodeFails() public {
+        address mockGateway = makeAddr("MockGateway");
+        address mockGasService = makeAddr("MockGasServiceNoCode");
+
+        // Mock code for gateway but not gas service
+        _mockNonEmptyContract(mockGateway);
+
+        AdaptersInput memory invalidInput = AdaptersInput({
+            axelar: AxelarInput({shouldDeploy: true, gateway: mockGateway, gasService: mockGasService}),
+            layerZero: LayerZeroInput({
+                shouldDeploy: false, endpoint: address(0), delegate: address(0), configParams: new SetConfigParam[](0)
+            }),
+            chainlink: ChainlinkInput({shouldDeploy: false, ccipRouter: address(0)}),
+            hyperlane: HyperlaneInput({shouldDeploy: false, mailbox: address(0), ism: address(0)}),
+            connections: new AdapterConnections[](0)
+        });
+
+        vm.expectRevert("Axelar gas service must be a deployed contract");
+        this._validateAxelarInputExternal(invalidInput);
+    }
+
+    function testLayerZeroEndpointZeroAddressFails() public {
+        AdaptersInput memory invalidInput = AdaptersInput({
+            axelar: AxelarInput({shouldDeploy: false, gateway: address(0), gasService: address(0)}),
+            layerZero: LayerZeroInput({
+                shouldDeploy: true, endpoint: address(0), delegate: address(0), configParams: new SetConfigParam[](0)
+            }),
+            chainlink: ChainlinkInput({shouldDeploy: false, ccipRouter: address(0)}),
+            hyperlane: HyperlaneInput({shouldDeploy: false, mailbox: address(0), ism: address(0)}),
+            connections: new AdapterConnections[](0)
+        });
+
+        vm.expectRevert("LayerZero endpoint address cannot be zero");
+        this._validateLayerZeroInputExternal(invalidInput);
+    }
+
+    function testLayerZeroEndpointNoCodeFails() public {
+        address mockEndpoint = makeAddr("MockEndpointNoCode");
+        AdaptersInput memory invalidInput = AdaptersInput({
+            axelar: AxelarInput({shouldDeploy: false, gateway: address(0), gasService: address(0)}),
+            layerZero: LayerZeroInput({
+                shouldDeploy: true, endpoint: mockEndpoint, delegate: address(0), configParams: new SetConfigParam[](0)
+            }),
+            chainlink: ChainlinkInput({shouldDeploy: false, ccipRouter: address(0)}),
+            hyperlane: HyperlaneInput({shouldDeploy: false, mailbox: address(0), ism: address(0)}),
+            connections: new AdapterConnections[](0)
+        });
+
+        vm.expectRevert("LayerZero endpoint must be a deployed contract");
+        this._validateLayerZeroInputExternal(invalidInput);
+    }
+
+    function testLayerZeroDelegateZeroAddressFails() public {
+        AdaptersInput memory invalidInput = AdaptersInput({
+            axelar: AxelarInput({shouldDeploy: false, gateway: address(0), gasService: address(0)}),
+            layerZero: LayerZeroInput({
+                shouldDeploy: true,
+                endpoint: LAYERZERO_ENDPOINT,
+                delegate: address(0),
+                configParams: new SetConfigParam[](0)
+            }),
+            chainlink: ChainlinkInput({shouldDeploy: false, ccipRouter: address(0)}),
+            hyperlane: HyperlaneInput({shouldDeploy: false, mailbox: address(0), ism: address(0)}),
+            connections: new AdapterConnections[](0)
+        });
+
+        vm.expectRevert("LayerZero delegate address cannot be zero");
+        this._validateLayerZeroInputExternal(invalidInput);
+    }
+
+    function testChainlinkZeroAddressFails() public {
+        AdaptersInput memory invalidInput = AdaptersInput({
+            axelar: AxelarInput({shouldDeploy: false, gateway: address(0), gasService: address(0)}),
+            layerZero: LayerZeroInput({
+                shouldDeploy: false, endpoint: address(0), delegate: address(0), configParams: new SetConfigParam[](0)
+            }),
+            chainlink: ChainlinkInput({shouldDeploy: true, ccipRouter: address(0)}),
+            hyperlane: HyperlaneInput({shouldDeploy: false, mailbox: address(0), ism: address(0)}),
+            connections: new AdapterConnections[](0)
+        });
+
+        vm.expectRevert("Chainlink ccipRouter address cannot be zero");
+        this._validateChainlinkInputExternal(invalidInput);
+    }
+
+    function testChainlinkNoCodeFails() public {
+        address mockCCIPRouter = makeAddr("MockCCIPRouterNoCode");
+        AdaptersInput memory invalidInput = AdaptersInput({
+            axelar: AxelarInput({shouldDeploy: false, gateway: address(0), gasService: address(0)}),
+            layerZero: LayerZeroInput({
+                shouldDeploy: false, endpoint: address(0), delegate: address(0), configParams: new SetConfigParam[](0)
+            }),
+            chainlink: ChainlinkInput({shouldDeploy: true, ccipRouter: mockCCIPRouter}),
+            hyperlane: HyperlaneInput({shouldDeploy: false, mailbox: address(0), ism: address(0)}),
+            connections: new AdapterConnections[](0)
+        });
+
+        vm.expectRevert("Chainlink ccipRouter must be a deployed contract");
+        this._validateChainlinkInputExternal(invalidInput);
+    }
+
+    // External wrapper functions to allow expectRevert to work properly (must be external)
+    function _validateAxelarInputExternal(AdaptersInput memory adaptersInput) external view {
+        _validateAxelarInput(adaptersInput);
+    }
+
+    function _validateLayerZeroInputExternal(AdaptersInput memory adaptersInput) external view {
+        _validateLayerZeroInput(adaptersInput);
+    }
+
+    function _validateChainlinkInputExternal(AdaptersInput memory adaptersInput) external view {
+        _validateChainlinkInput(adaptersInput);
+    }
+}
+
+/// @dev Deploying through the DeployGate must produce the very same deployment, only signed differently
+///      and at different addresses
+contract FullDeploymentGatedTest is FullDeploymentConfigTest {
+    function testEverythingWentThroughTheDeployGate() public view {
+        // A floor, not a count: it catches a deployment that produced almost nothing
+        assertGt(deployedContracts, 60, "the whole protocol should go through the DeployGate");
+    }
+
+    /// @dev The commitment is the whole of the gate's state, so a spent one leaves an executor nothing to
+    ///      deploy with, on this namespace or any other
+    function testTheCommitmentIsSpent() public view {
+        (,, uint64 cursor,) = deployGate.commitments(namespace_, DEFAULT_COMMITMENT_ID);
+        assertEq(cursor, deployedContracts, "every committed contract was deployed");
+        assertEq(
+            deployGate.committed(namespace_, DEFAULT_COMMITMENT_ID, _gatedSalt("root", V3_3)),
+            0,
+            "and nothing is left to deploy"
+        );
+    }
+
+    function testEveryContractIsDeployed() public view {
+        assertGt(address(deployGate).code.length, 0, "deployGate");
+        assertGt(address(root).code.length, 0, "root");
+        assertGt(address(spoke).code.length, 0, "spoke");
+        assertGt(address(hub).code.length, 0, "hub");
+        assertGt(address(coreBatcher).code.length, 0, "coreBatcher");
+        assertGt(address(nonCoreBatcher).code.length, 0, "nonCoreBatcher");
+        assertGt(address(adapterBatchers[0]).code.length, 0, "adapterBatcher0");
+        assertGt(address(layerZeroAdapter).code.length, 0, "layerZeroAdapter");
+    }
+
+    /// @dev The DeployGate deploys, it never wires. A leaked key must not reach a live deployment.
+    function testDeployGateHasNoPermissions() public view {
+        address deployGate_ = address(deployGate);
+
+        assertEq(root.wards(deployGate_), 0, "root");
+        assertEq(gateway.wards(deployGate_), 0, "gateway");
+        assertEq(multiAdapter.wards(deployGate_), 0, "multiAdapter");
+        assertEq(spoke.wards(deployGate_), 0, "spoke");
+        assertEq(spokeRegistry.wards(deployGate_), 0, "spokeRegistry");
+        assertEq(hub.wards(deployGate_), 0, "hub");
+        assertEq(hubRegistry.wards(deployGate_), 0, "hubRegistry");
+        assertEq(shareTokenRegistrar.wards(deployGate_), 0, "shareTokenRegistrar");
+        assertEq(tokenBridge.wards(deployGate_), 0, "tokenBridge");
+    }
+
+    /// @dev The registry reports what was deployed, once each. The commit phase registers addresses as it
+    ///      walks, and the state rollback that ends it is what discards them again, this script's own storage
+    ///      being rolled back along with everything else
+    /// @dev The action batchers are deployed but not reported: they hold no permission once they have
+    ///      wired the protocol, and nothing ever reads one back, so they do not belong in `env/<environment>/<network>.json`
+    function testReportsEveryContractButTheBatchers() public view {
+        assertEq(
+            registeredCount() + 2 + adapterBatchers.length,
+            deployedContracts,
+            "the registry should report every other contract"
+        );
+
+        assertFalse(_registered("coreBatcher"), "coreBatcher is not reported");
+        assertFalse(_registered("nonCoreBatcher"), "nonCoreBatcher is not reported");
+        assertFalse(_registered("adapterBatcher0"), "adapterBatcher0 is not reported");
+    }
+
+    /// @dev Nothing stays committed once deployed, so a stale approval cannot linger on chain
+    function testCommitmentsAreConsumed() public view {
+        assertEq(deployGate.committed(namespace_, DEFAULT_COMMITMENT_ID, _gatedSalt("root", V3_3)), 0, "root");
+        assertEq(deployGate.committed(namespace_, DEFAULT_COMMITMENT_ID, _gatedSalt("spoke", V3_3)), 0, "spoke");
+        assertEq(
+            deployGate.committed(namespace_, DEFAULT_COMMITMENT_ID, _gatedSalt("coreBatcher", V_LATEST)),
+            0,
+            "coreBatcher"
+        );
+    }
+
+    /// @dev Wiring depends on the addresses predicted while queueing, so a mismatch would show up here
+    function testWiringUsesThePredictedAddresses() public view {
+        assertEq(address(gateway.processor()), address(messageProcessor));
+        assertEq(address(gateway.adapter()), address(multiAdapter));
+        assertEq(address(spoke.sender()), address(messageDispatcher));
+        assertEq(address(hub.sender()), address(messageDispatcher));
+        assertEq(address(hubHandler.sender()), address(messageDispatcher));
+        assertEq(address(messageDispatcher.spokeHandler()), address(spokeHandler));
+        assertEq(address(messageProcessor.hubHandler()), address(hubHandler));
+        assertEq(address(escrowFactory.spoke()), address(spoke));
+        assertEq(address(protocolGuardian.safe()), address(ADMIN_SAFE));
+        assertEq(address(opsGuardian.opsSafe()), address(OPS_SAFE));
+
+        assertEq(gateway.wards(address(root)), 1);
+        assertEq(hub.wards(address(hubHandler)), 1);
+        assertEq(spokeRegistry.wards(address(spoke)), 1);
+        assertEq(root.wards(address(messageDispatcher)), 1);
+        assertTrue(root.endorsements(address(spoke)) == 1);
+
+        _assertCurrenciesRegistered();
+    }
+
+    /// @dev The action batchers must give up their permissions, exactly as in a direct deployment
+    function testActionBatchersRevokedThemselves() public view {
+        assertEq(root.wards(address(coreBatcher)), 0, "coreBatcher on root");
+        assertEq(gateway.wards(address(coreBatcher)), 0, "coreBatcher on gateway");
+        assertEq(hub.wards(address(coreBatcher)), 0, "coreBatcher on hub");
+        assertEq(spoke.wards(address(coreBatcher)), 0, "coreBatcher on spoke");
+        assertEq(root.wards(address(nonCoreBatcher)), 0, "nonCoreBatcher on root");
+        assertEq(multiAdapter.wards(address(adapterBatchers[0])), 0, "multiAdapter on adapterBatcher0");
+    }
+}
+
+/// @dev A chain that does not take the vault stack: the spoke half of the Vault Development Kit neither
+///      deployed, nor wired, nor reported, and the hub half there regardless, because any hub may settle for
+///      vaults on a peer that does take it
+contract FullDeploymentWithoutVaultsTest is FullDeploymentConfigTest {
+    function setUp() public override {
+        vaults_ = false;
+        super.setUp();
+    }
+
+    function testTheSpokeHalfIsNotDeployed() public {
+        string[10] memory names = [
+            "vaultFactory",
+            "vaultRequestRouter",
+            "vaultRouter",
+            "spokeOracle",
+            "perRequestPolicy",
+            "transferablePerRequestPolicy",
+            "perInvestorPolicy",
+            "perPeriodPolicy",
+            "reserveInstantPolicy",
+            "vaultLiquidityRoute"
+        ];
+
+        for (uint256 i; i < names.length; i++) {
+            assertEq(gatedAddress(names[i], V3_3).code.length, 0, names[i]);
+            assertFalse(_registered(names[i]), names[i]);
+        }
+
+        assertEq(address(vaultFactory), address(0), "vaultFactory");
+        assertEq(address(vaultRequestRouter), address(0), "vaultRequestRouter");
+        assertEq(registeredCount() + 3, deployedContracts, "everything deployed is reported but the batchers");
+    }
+
+    function testNothingIsWiredToIt() public {
+        assertEq(subsidyManager.wards(gatedAddress("vaultRequestRouter", V3_3)), 0, "no subsidy withdrawer");
+        assertFalse(root.endorsed(gatedAddress("vaultRouter", V3_3)), "no router endorsed");
+        assertEq(subsidyManager.wards(address(nonCoreBatcher)), 0, "the batcher revoked itself");
+    }
+
+    function testTheHubHalfIsDeployed() public view {
+        assertEq(orderBook.wards(address(root)), 1);
+        assertEq(orderBook.wards(address(hubHandler)), 1);
+        assertEq(orderBook.wards(address(nonCoreBatcher)), 0);
+        assertEq(address(orderBook.hub()), address(hub));
+
+        assertEq(address(feeRequestManager.orderBook()), address(orderBook));
+    }
+}
+
+/// @dev The point of the design: the admin signs a single transaction, and nothing but what it committed to
+///      can then be deployed
+contract FullDeploymentPhasedTest is FullDeploymentConfigTest {
+    address immutable EXECUTOR = makeAddr("executor");
+
+    function setUp() public virtual override {
+        _mockBridgeContracts();
+        _bootstrap();
+
+        // The phases are signed by different accounts on a real deployment, so the fixture separates them too.
+        // Running both as one account would hide an init code that depends on who is deploying: it would come
+        // out the same in both walks here, and only revert with `NotCommitted` on chain, after the signature.
+        // Naming the executor is the commit phase's job, so nothing has to be granted before it
+        _deploy(DeployPhase.Commit);
+    }
+
+    /// @dev One phase at a time, unlike the base fixture, which runs both, and each as the account that signs
+    ///      it: the admin commits, an executor that is a ward of nothing deploys
+    function _deploy(DeployPhase phase) internal {
+        _deploy(phase, "");
+    }
+
+    function _deploy(DeployPhase phase, string memory deploymentId_) internal {
+        if (phase == DeployPhase.Commit) {
+            deployFull(_input(deploymentId_), phase, namespace_, _executors(EXECUTOR));
+            return;
+        }
+
+        vm.startPrank(EXECUTOR);
+        deployFull(_input(deploymentId_), phase, namespace_, _executors(EXECUTOR));
+        vm.stopPrank();
+    }
+
+    function testCommitPhaseDeploysNothingButTheDeployGate() public view {
+        assertGt(address(deployGate).code.length, 0, "deployGate");
+        assertEq(address(root).code.length, 0, "root");
+        assertEq(address(spoke).code.length, 0, "spoke");
+        assertEq(deployedContracts, 0);
+    }
+
+    function testCommitPhaseCommitsEveryContract() public view virtual {
+        assertGt(committedContracts, 45, "the admin should commit the whole protocol in one transaction");
+        assertTrue(deployGate.committed(namespace_, DEFAULT_COMMITMENT_ID, _gatedSalt("root", V3_3)) != 0, "root");
+        assertTrue(deployGate.committed(namespace_, DEFAULT_COMMITMENT_ID, _gatedSalt("spoke", V3_3)) != 0, "spoke");
+        assertTrue(deployGate.committed(namespace_, DEFAULT_COMMITMENT_ID, _gatedSalt("hub", V3_3)) != 0, "hub");
+        assertTrue(
+            deployGate.committed(namespace_, DEFAULT_COMMITMENT_ID, _gatedSalt("coreBatcher", V_LATEST)) != 0,
+            "coreBatcher"
+        );
+        assertTrue(
+            deployGate.committed(namespace_, DEFAULT_COMMITMENT_ID, _gatedSalt("neverDeployed", V3_3)) == 0,
+            "unknown salt"
+        );
+    }
+
+    function testExecutorCanOnlyDeployWhatWasCommitted() public {
+        assertTrue(
+            deployGate.isExecutor(namespace_, DEFAULT_COMMITMENT_ID, EXECUTOR),
+            "the executor may deploy what was committed"
+        );
+        assertFalse(
+            deployGate.isExecutor(namespace_, DEFAULT_COMMITMENT_ID, address(this)),
+            "the namespace is not the one deploying"
+        );
+
+        _deploy(DeployPhase.Deploy);
+
+        // Same deployment a single signer would have produced
+        assertGt(deployedContracts, 45);
+        assertEq(address(hub.sender()), address(messageDispatcher));
+        assertEq(address(protocolGuardian.safe()), address(ADMIN_SAFE));
+        assertEq(gateway.wards(address(root)), 1);
+        assertEq(root.wards(address(coreBatcher)), 0, "coreBatcher should have revoked itself");
+        assertEq(root.wards(address(deployGate)), 0, "the gate must gain nothing");
+        assertEq(root.wards(EXECUTOR), 0, "nor the executor that deployed it");
+        _assertCurrenciesRegistered();
+    }
+
+    /// @dev Deploying needs a commitment, so the executor cannot deploy a set the admin never committed to.
+    ///      Caught before anything is broadcast, the DeployGate itself being the backstop.
+    /// @dev The guard trips on the first contract, before the gate is called at all, so this runs from here
+    ///      rather than under a prank, which expectRevert needs anyway
+    function testExecutorCannotDeployWhatWasNotCommitted() public {
+        vm.expectRevert("Deployment does not match what was committed, commit again");
+        this.deployUncommitted();
+    }
+
+    /// @dev The same protocol under another deployment id, through the same gate: nothing here was ever committed
+    function deployUncommitted() external {
+        _deploy(DeployPhase.Deploy, "uncommitted");
+    }
+}
+
+/// @dev Launching onto a chain that already carries a Root: it is kept rather than replaced, and the wiring
+///      only Root can do waits for `RootFixes`, since the action batchers are wards of nothing on it
+contract FullDeploymentExistingRootTest is FullDeploymentConfigTest {
+    Root internal priorRoot;
+
+    function setUp() public override {
+        // Stands for the Root a previous release left on the chain, this contract being its governance
+        priorRoot = new Root(MAINNET_DELAY, address(this));
+        existingRoot_ = address(priorRoot);
+
+        super.setUp();
+    }
+
+    function testKeepsTheRootItWasGiven() public view {
+        assertEq(address(root), address(priorRoot), "the deployment should not have deployed a second Root");
+        assertEq(root.wards(address(this)), 1, "the Root it was given keeps its own wards");
+    }
+
+    /// @dev Everything not reaching into Root is wired as usual, batcher wards and all
+    function testTheRestOfTheDeploymentIsUnchanged() public view {
+        assertEq(gateway.wards(address(root)), 1, "root on gateway");
+        assertEq(hub.wards(address(hubHandler)), 1, "hubHandler on hub");
+        assertEq(address(hub.sender()), address(messageDispatcher));
+        assertEq(gateway.wards(address(coreBatcher)), 0, "coreBatcher should have revoked itself");
+        _assertCurrenciesRegistered();
+    }
+
+    /// @dev The one piece of wiring that waits for the launch spell rather than `RootFixes`: the previous
+    ///      release's assets have to land under their old ids before anyone can register one
+    function testSpokeSenderIsPendingUntilTheLaunchSpell() public {
+        assertEq(address(spoke.sender()), address(0));
+
+        ERC20 asset = new ERC20(6);
+        vm.expectRevert();
+        spoke.registerAsset(centrifugeId_, address(asset), 0, address(this));
+
+        // Casting the fixes does not open the window: governance may get to them before the spell is ready
+        priorRoot.scheduleRely(address(rootFixes));
+        vm.warp(block.timestamp + MAINNET_DELAY);
+        priorRoot.executeScheduledRely(address(rootFixes));
+        rootFixes.cast();
+
+        vm.expectRevert();
+        spoke.registerAsset(centrifugeId_, address(asset), 0, address(this));
+
+        // What the spell does last, with the ward Root gives it
+        vm.prank(address(root));
+        spoke.file("sender", address(messageDispatcher));
+
+        spoke.registerAsset(centrifugeId_, address(asset), 0, address(this));
+        assertFalse(spokeRegistry.assetToId(address(asset), 0).isNull(), "asset registered");
+    }
+
+    /// @dev Deploy-time only, like the action batchers, so it stays out of `env/<network>.json`. The Root it
+    ///      wires does belong there, at the address it already had
+    function testRootIsRecordedAndRootFixesIsNot() public view {
+        assertTrue(_registered("root"), "root");
+        assertFalse(_registered("rootFixes"), "rootFixes");
+    }
+
+    /// @dev The batchers cannot touch a Root that does not ward them, so they must not have tried
+    function testRootWiringIsLeftUndone() public view {
+        assertEq(root.wards(address(messageDispatcher)), 0, "messageDispatcher on root");
+        assertEq(root.wards(address(messageProcessor)), 0, "messageProcessor on root");
+        assertEq(root.wards(address(protocolGuardian)), 0, "protocolGuardian on root");
+        assertEq(root.wards(address(coreBatcher)), 0, "coreBatcher on root");
+        assertEq(root.wards(address(nonCoreBatcher)), 0, "nonCoreBatcher on root");
+        assertFalse(root.endorsed(address(spoke)), "spoke endorsed");
+        assertFalse(root.endorsed(address(spokeHandler)), "spokeHandler endorsed");
+        assertFalse(root.endorsed(address(tokenBridge)), "tokenBridge endorsed");
+        assertFalse(root.endorsed(address(shareManager)), "shareManager endorsed");
+        assertFalse(root.endorsed(address(vaultRouter)), "vaultRouter endorsed");
+    }
+
+    /// @dev What the batchers left, done under a ward governance grants through the ordinary timelock
+    function testRootFixesFinishesTheWiring() public {
+        assertEq(address(rootFixes.root()), address(root), "rootFixes should point at the Root in use");
+
+        priorRoot.scheduleRely(address(rootFixes));
+        vm.warp(block.timestamp + MAINNET_DELAY);
+        priorRoot.executeScheduledRely(address(rootFixes));
+
+        rootFixes.cast();
+
+        // Exactly what a deployment that brought its own Root up ends with
+        assertEq(root.wards(address(messageDispatcher)), 1, "messageDispatcher on root");
+        assertEq(root.wards(address(messageProcessor)), 1, "messageProcessor on root");
+        assertEq(root.wards(address(protocolGuardian)), 1, "protocolGuardian on root");
+        assertTrue(root.endorsed(address(spoke)), "spoke endorsed");
+        assertTrue(root.endorsed(address(spokeHandler)), "spokeHandler endorsed");
+        assertTrue(root.endorsed(address(tokenBridge)), "tokenBridge endorsed");
+        assertTrue(root.endorsed(address(shareManager)), "shareManager endorsed");
+        assertTrue(root.endorsed(address(vaultRouter)), "vaultRouter endorsed");
+
+        // And it gives the ward back, as the batchers do
+        assertTrue(rootFixes.done());
+        assertEq(root.wards(address(rootFixes)), 0, "rootFixes should have revoked itself");
+    }
+
+    function testRootFixesNeedsItsWard() public {
+        vm.expectRevert(IAuth.NotAuthorized.selector);
+        rootFixes.cast();
+    }
+
+    function testRootFixesCastsOnce() public {
+        priorRoot.scheduleRely(address(rootFixes));
+        vm.warp(block.timestamp + MAINNET_DELAY);
+        priorRoot.executeScheduledRely(address(rootFixes));
+
+        rootFixes.cast();
+
+        vm.expectRevert(RootFixes.AlreadyCast.selector);
+        rootFixes.cast();
+    }
+}
+
+/// @dev The phases apart, over an existing Root: what the validate phase commits has to be exactly what the
+///      execute phase rebuilds, and Root is a constructor argument of nearly everything in it
+contract ExistingRootPhasedTest is FullDeploymentPhasedTest {
+    Root internal priorRoot;
+
+    function setUp() public override {
+        priorRoot = new Root(MAINNET_DELAY, address(this));
+        existingRoot_ = address(priorRoot);
+
+        super.setUp();
+    }
+
+    /// @dev The base fixture's, less the Root this chain already carries — which is not part of the
+    ///      commitment, nothing here deploying it — plus the `RootFixes` that stands in for it
+    function testCommitPhaseCommitsEveryContract() public view override {
+        assertGt(committedContracts, 50, "the admin should commit the whole protocol in one transaction");
+        assertTrue(deployGate.committed(namespace_, DEFAULT_COMMITMENT_ID, _gatedSalt("spoke", V3_3)) != 0, "spoke");
+        assertTrue(deployGate.committed(namespace_, DEFAULT_COMMITMENT_ID, _gatedSalt("hub", V3_3)) != 0, "hub");
+        assertTrue(
+            deployGate.committed(namespace_, DEFAULT_COMMITMENT_ID, _gatedSalt("rootFixes", V_LATEST)) != 0, "rootFixes"
+        );
+        assertTrue(
+            deployGate.committed(namespace_, DEFAULT_COMMITMENT_ID, _gatedSalt("root", V3_3)) == 0,
+            "the Root already on the chain is not committed to"
+        );
+    }
+
+    /// @dev The one address a committing run has to be able to name, its walk having been rolled back
+    function testCommitPhaseStillNamesRootFixes() public view {
+        assertEq(address(rootFixes), gatedAddressOf("rootFixes"), "carried across the rollback");
+        assertEq(address(rootFixes).code.length, 0, "but nothing is deployed there yet");
+        assertEq(address(root), address(0), "the rest of the walk is gone");
+    }
+
+    function gatedAddressOf(string memory name) internal view returns (address) {
+        return deployGate.addressOf(namespace_, _gatedSalt(name, V_LATEST));
+    }
+
+    function testDeployPhaseRebuildsWhatWasCommitted() public {
+        _deploy(DeployPhase.Deploy);
+
+        assertEq(address(root), address(priorRoot), "the Root it was given");
+        assertGt(address(rootFixes).code.length, 0, "rootFixes");
+        assertEq(address(spoke.sender()), address(0), "spoke sender waits for the launch spell");
+        assertEq(gateway.wards(address(root)), 1, "root on gateway");
+        assertEq(root.wards(address(messageDispatcher)), 0, "root wiring waits for rootFixes");
+    }
+}
+
+/// @dev The flag and the ward it implies have to agree, or the batcher stops the deployment. Unreachable
+///      through `FullDeployer`, which derives the flag from the same `input.root`, and asserted because the
+///      wrong pairing is silent: skipping the wiring while holding the ward leaves the batcher a ward of Root
+contract ActionBatcherRootAccessTest is Test {
+    function testWiringARootItIsNoWardOfReverts() public {
+        Root root = new Root(48 hours, makeAddr("someoneElse"));
+
+        vm.expectRevert(RootAccessMismatch.selector);
+        new CoreActionBatcher(_report(root), ISafe(address(0)), ISafe(address(0)), address(0), address(0), true);
+    }
+
+    function testSkippingARootItIsAWardOfReverts() public {
+        // Warded, as a freshly deployed Root wards the batcher that deployed it
+        Root root = new Root(48 hours, _batcherAddress());
+
+        vm.expectRevert(RootAccessMismatch.selector);
+        new CoreActionBatcher(_report(root), ISafe(address(0)), ISafe(address(0)), address(0), address(0), false);
+    }
+
+    /// @dev Where the next `new CoreActionBatcher` in this contract lands, so the Root above can ward it
+    function _batcherAddress() private view returns (address) {
+        return vm.computeCreateAddress(address(this), vm.getNonce(address(this)) + 1);
+    }
+
+    function _report(Root root) private pure returns (CoreReport memory report) {
+        report.root = root;
+    }
+}
+
+/// @dev A kept Root keeps its own delay, so `AdapterFailover` has to follow that rather than the input, or
+///      the two disagree about what the protocol delay is
+contract FullDeploymentKeptRootDelayTest is FullDeploymentConfigTest {
+    uint256 constant PRIOR_DELAY = 6 hours;
+
+    function setUp() public override {
+        existingRoot_ = address(new Root(PRIOR_DELAY, address(this)));
+        delay_ = MAINNET_DELAY;
+
+        super.setUp();
+    }
+
+    function testAdapterFailoverFollowsTheKeptRoot() public view {
+        assertEq(root.delay(), PRIOR_DELAY, "the input delay must not touch a kept Root");
+        assertEq(adapterFailover.timelock(), uint64(PRIOR_DELAY));
+    }
+}
+
+/// @dev What everything off mainnet deploys: no timelock, so a spell casts in the block it was scheduled in
+contract FullDeploymentNoDelayTest is FullDeploymentConfigTest {
+    function setUp() public override {
+        delay_ = 0;
+
+        super.setUp();
+    }
+
+    function testRootCarriesNoDelay() public view {
+        assertEq(root.delay(), 0);
+        assertEq(adapterFailover.timelock(), 0, "AdapterFailover should match the protocol delay");
+    }
+
+    function testASpellIsRelyableAtOnce() public {
+        address spell = makeAddr("spell");
+
+        vm.prank(address(ADMIN_SAFE));
+        protocolGuardian.scheduleRely(spell);
+
+        root.executeScheduledRely(spell);
+
+        assertEq(root.wards(spell), 1);
+    }
+
+    /// @dev The delay is init code, which CREATE3 does not look at
+    function testTheDelayMovesNoAddress() public {
+        assertEq(address(root), gatedAddress("root", V3_3));
+        assertEq(address(adapterFailover), gatedAddress("adapterFailover", V3_3));
+    }
+}
+
+/// @dev What the launch does with the lanes it is handed: every adapter a lane names is wired to its peer, and
+///      only those not flagged wired-only join the lane's global adapter set, which the threshold counts.
+contract FullDeploymentTestConnections is FullDeploymentConfigTest {
+    using MessageLib for *;
+
+    // LayerZero and Hyperlane in the set, Axelar and Chainlink wired only
+    uint16 constant MIXED = 5;
+    // Same split with no threshold given: the batcher falls back to the size of the set, not of what it wires
+    uint16 constant FALLBACK = 6;
+
+    function _lane(uint16 centrifugeId, uint8 threshold) private pure returns (AdapterConnections memory) {
+        return AdapterConnections({
+            centrifugeId: centrifugeId,
+            layerZeroId: 30_000 + centrifugeId,
+            axelarId: string.concat("remote-", vm.toString(centrifugeId)),
+            chainlinkId: 5000 + centrifugeId,
+            hyperlaneId: centrifugeId,
+            threshold: threshold,
+            layerZeroWiredOnly: false,
+            axelarWiredOnly: true,
+            chainlinkWiredOnly: true,
+            hyperlaneWiredOnly: false
+        });
+    }
+
+    function _ulnConfig(uint16 centrifugeId) private pure returns (bytes memory) {
+        return abi.encode("uln", centrifugeId);
+    }
+
+    function setUp() public override {
+        connections_.push(_lane(MIXED, 1));
+        connections_.push(_lane(FALLBACK, 0));
+        layerZeroConfigParams_.push(SetConfigParam({eid: 30_000 + MIXED, configType: 2, config: _ulnConfig(MIXED)}));
+        layerZeroConfigParams_.push(
+            SetConfigParam({eid: 30_000 + FALLBACK, configType: 2, config: _ulnConfig(FALLBACK)})
+        );
+        vm.recordLogs();
+        super.setUp();
+    }
+
+    /// @dev Root holds the adapters before the walk moves past the first batcher, so a spell can repair a walk
+    ///      that stops partway
+    function testFirstAdapterBatcherReliesRoot() public {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 rootAt = type(uint256).max;
+        uint256 handOverAt = type(uint256).max;
+
+        for (uint256 i; i < logs.length; i++) {
+            if (logs[i].emitter != address(layerZeroAdapter) || logs[i].topics[0] != IAuth.Rely.selector) continue;
+            address user = address(uint160(uint256(logs[i].topics[1])));
+            if (user == address(root)) rootAt = i;
+            if (user == address(adapterBatchers[1])) handOverAt = i;
+        }
+
+        assertLt(handOverAt, type(uint256).max, "the second batcher was relied");
+        assertLt(rootAt, handOverAt, "Root was relied before the first batcher handed over");
+    }
+
+    function testOneAdapterBatcherPerLane() public view {
+        assertEq(adapterBatchers.length, connections_.length);
+    }
+
+    function testNoAdapterBatcherIsReported() public view {
+        assertEq(registeredCount() + 2 + connections_.length, deployedContracts, "only the batchers go unreported");
+        for (uint256 i; i < adapterBatchers.length; i++) {
+            assertFalse(_registered(string.concat("adapterBatcher", vm.toString(i))));
+        }
+    }
+
+    function testEachLaneGetsItsOwnLayerZeroConfig() public view {
+        LayerZeroEndpointMock endpoint = LayerZeroEndpointMock(LAYERZERO_ENDPOINT);
+        address[2] memory oapps = [address(layerZeroAdapter), address(layerZeroStandby.underlying())];
+        uint16[2] memory lanes = [MIXED, FALLBACK];
+
+        for (uint256 i; i < oapps.length; i++) {
+            for (uint256 j; j < lanes.length; j++) {
+                uint32 eid = 30_000 + lanes[j];
+                assertEq(endpoint.configs(oapps[i], endpoint.sendLib(), eid), _ulnConfig(lanes[j]), "send config");
+                assertEq(endpoint.configs(oapps[i], endpoint.receiveLib(), eid), _ulnConfig(lanes[j]), "receive config");
+            }
+        }
+    }
+
+    function testEveryAdapterBatcherRevokedItself() public view {
+        address[9] memory administered = [
+            address(multiAdapter),
+            address(layerZeroAdapter),
+            address(axelarAdapter),
+            address(chainlinkAdapter),
+            address(hyperlaneAdapter),
+            address(layerZeroStandby.underlying()),
+            address(axelarStandby.underlying()),
+            address(chainlinkStandby.underlying()),
+            address(hyperlaneStandby.underlying())
+        ];
+
+        for (uint256 i; i < adapterBatchers.length; i++) {
+            for (uint256 j; j < administered.length; j++) {
+                assertEq(IAuth(administered[j]).wards(address(adapterBatchers[i])), 0, "an adapter batcher kept a ward");
+            }
+        }
+    }
+
+    /// @dev The mock endpoint, as the real one, takes a lane's config only from the delegate
+    function testLayerZeroDelegatePassesDownTheChain() public view {
+        LayerZeroEndpointMock endpoint = LayerZeroEndpointMock(LAYERZERO_ENDPOINT);
+        address[2] memory oapps = [address(layerZeroAdapter), address(layerZeroStandby.underlying())];
+
+        for (uint256 i; i < oapps.length; i++) {
+            assertEq(endpoint.sendLibraries(oapps[i], 30_000 + MIXED), endpoint.sendLib(), "first lane");
+            assertEq(endpoint.sendLibraries(oapps[i], 30_000 + FALLBACK), endpoint.sendLib(), "second lane");
+            assertEq(endpoint.delegates(oapps[i]), LAYERZERO_DELEGATE);
+        }
+    }
+
+    /// @dev The binding itself, both ways, rather than `isWired`, which holds as soon as either side is set
+    function testWiresEveryAdapterTheLaneNamesToItsPeer() public view {
+        (uint32 eid, address lzPeer) = layerZeroAdapter.destinations(MIXED);
+        (uint16 lzSource, address lzSourceAddr) = layerZeroAdapter.sources(30_005);
+        assertEq(eid, 30_005, "layerZero destination");
+        assertEq(lzPeer, address(layerZeroAdapter), "layerZero peer");
+        assertEq(lzSource, MIXED, "layerZero source");
+        assertEq(lzSourceAddr, address(layerZeroAdapter), "layerZero source peer");
+
+        (uint32 domain, address hlPeer) = hyperlaneAdapter.destinations(MIXED);
+        (uint16 hlSource, address hlSourceAddr) = hyperlaneAdapter.sources(5);
+        assertEq(domain, 5, "hyperlane destination");
+        assertEq(hlPeer, address(hyperlaneAdapter), "hyperlane peer");
+        assertEq(hlSource, MIXED, "hyperlane source");
+        assertEq(hlSourceAddr, address(hyperlaneAdapter), "hyperlane source peer");
+
+        string memory axelarPeer = vm.toString(address(axelarAdapter));
+        (string memory axelarId, string memory axPeer) = axelarAdapter.destinations(MIXED);
+        (uint16 axSource, bytes32 axSourceHash) = axelarAdapter.sources("remote-5");
+        assertEq(axelarId, "remote-5", "axelar destination");
+        assertEq(axPeer, axelarPeer, "axelar peer");
+        assertEq(axSource, MIXED, "axelar source");
+        assertEq(axSourceHash, keccak256(bytes(axelarPeer)), "axelar source peer");
+
+        (uint64 selector, address clPeer,) = chainlinkAdapter.destinations(MIXED);
+        (uint16 clSource, address clSourceAddr,) = chainlinkAdapter.sources(5005);
+        assertEq(selector, 5005, "chainlink destination");
+        assertEq(clPeer, address(chainlinkAdapter), "chainlink peer");
+        assertEq(clSource, MIXED, "chainlink source");
+        assertEq(clSourceAddr, address(chainlinkAdapter), "chainlink source peer");
+    }
+
+    function testGlobalSetHoldsOnlyTheAdaptersNotWiredOnly() public view {
+        PoolId global = PoolId.wrap(0);
+        uint16 session = multiAdapter.activeSessionId(MIXED, global);
+
+        assertEq(multiAdapter.quorum(MIXED, global), 2, "set size");
+        assertEq(multiAdapter.threshold(MIXED, global), 1, "threshold");
+        assertEq(address(multiAdapter.adapters(MIXED, global, session, 0)), address(layerZeroAdapter));
+        assertEq(address(multiAdapter.adapters(MIXED, global, session, 1)), address(hyperlaneAdapter));
+    }
+
+    /// @dev A standby follows its global adapter onto every lane it is wired to, wired only or not
+    function testStandbyIsWiredOnALaneItsAdapterIsWiredOnlyTo() public view {
+        AxelarAdapter axelar = AxelarAdapter(address(axelarStandby.underlying()));
+        (string memory axelarId, string memory peer) = axelar.destinations(MIXED);
+        assertEq(axelarId, "remote-5");
+        assertEq(peer, vm.toString(address(axelar)), "the peer's standby underlying");
+    }
+
+    /// @dev Four adapters wired, two in the set: an unset threshold means all of the set, not all that is wired
+    function testUnsetThresholdIsTheSizeOfTheSet() public view {
+        assertEq(multiAdapter.quorum(FALLBACK, PoolId.wrap(0)), 2, "set size");
+        assertEq(multiAdapter.threshold(FALLBACK, PoolId.wrap(0)), 2, "threshold falls back to the set");
+    }
+
+    /// @dev The property the flag exists for: a wired-only adapter is bound to its peer, yet the global pool does
+    ///      not take a vote from it, while an adapter in the set is counted for the same message
+    function testWiredOnlyAdapterCannotVoteOnAGlobalMessage() public {
+        bytes memory message = MessageLib.ScheduleUpgrade({target: bytes32(uint256(1))}).serialize();
+        bytes memory payload = abi.encodePacked(multiAdapter.activeSessionId(MIXED, PoolId.wrap(0)), message);
+
+        vm.prank(address(layerZeroAdapter));
+        multiAdapter.vote(MIXED, payload);
+
+        vm.prank(address(axelarAdapter));
+        vm.expectRevert(IMultiAdapter.InvalidAdapter.selector);
+        multiAdapter.vote(MIXED, payload);
+
+        vm.prank(address(chainlinkAdapter));
+        vm.expectRevert(IMultiAdapter.InvalidAdapter.selector);
+        multiAdapter.vote(MIXED, payload);
+    }
+}

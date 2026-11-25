@@ -1,0 +1,92 @@
+{
+  "fuzzing": {
+    "workers": 10,
+    "workerResetLimit": 50,
+    "timeout": 3600,
+    "testLimit": 0,
+    "callSequenceLength": 100,
+    "corpusDirectory": "medusa",
+    "coverageEnabled": true,
+    "deploymentOrder": [
+      "CryticE2ETester"
+    ],
+    "targetContracts": [
+      "CryticE2ETester"
+    ],
+    "targetContractsBalances": [
+      "0x1043561a8829300000"
+    ],
+    "constructorArgs": {},
+    "deployerAddress": "0x7FA9385bE102ac3EAc297483Dd6233D62b3e1496",
+    "senderAddresses": [
+      "0x10000",
+      "0x20000",
+      "0x30000"
+    ],
+    "blockNumberDelayMax": 300,
+    "blockTimestampDelayMax": 3600,
+    "blockGasLimit": 125000000,
+    "transactionGasLimit": 12500000,
+    "testing": {
+      "stopOnFailedTest": false,
+      "stopOnFailedContractMatching": false,
+      "stopOnNoTests": true,
+      "testAllContracts": false,
+      "traceAll": false,
+      "assertionTesting": {
+        "enabled": true,
+        "testViewMethods": true,
+        "panicCodeConfig": {
+          "failOnCompilerInsertedPanic": false,
+          "failOnAssertion": true,
+          "failOnArithmeticUnderflow": true,
+          "failOnDivideByZero": true,
+          "failOnEnumTypeConversionOutOfBounds": false,
+          "failOnIncorrectStorageAccess": false,
+          "failOnPopEmptyArray": false,
+          "failOnOutOfBoundsArrayAccess": true,
+          "failOnAllocateTooMuchMemory": false,
+          "failOnCallUninitializedVariable": false
+        }
+      },
+      "propertyTesting": {
+        "enabled": false,
+        "testPrefixes": [
+          "property_"
+        ]
+      },
+      "optimizationTesting": {
+        "enabled": false,
+        "testPrefixes": [
+          "optimize_"
+        ]
+      }
+    },
+    "chainConfig": {
+      "codeSizeCheckDisabled": true,
+      "cheatCodes": {
+        "cheatCodesEnabled": true,
+        "enableFFI": false
+      }
+    },
+    "coverageFormats": [
+      "lcov",
+      "html"
+    ]
+  },
+  "compilation": {
+    "platform": "crytic-compile",
+    "platformConfig": {
+      "target": "test/integration/recon-end-to-end/CryticE2ETester.sol",
+      "solcVersion": "",
+      "exportDirectory": "",
+      "args": [
+        "--foundry-compile-all"
+      ]
+    }
+  },
+  "logging": {
+    "level": "info",
+    "logDirectory": ""
+  }
+}

@@ -1,0 +1,66 @@
+@startuml vaults
+title Vaults
+hide empty members
+
+interface IVault
+interface IVaultBase
+interface IAsyncVault
+interface IERC7540Deposit
+interface IERC7540Redeem
+interface IERC7540Operator
+interface "IERC8161{Deposit,Redeem}Transferable" as ITransferable
+interface IERC7575
+interface IVaultDepositCallbacks
+interface IVaultRedeemCallbacks
+
+IVaultBase -up-|> IVault
+IVaultBase -up-|> IERC7540Operator
+IAsyncVault -up-|> IVaultBase
+IAsyncVault -up-|> IERC7540Deposit
+IAsyncVault -up-|> IERC7540Redeem
+IAsyncVault -up-|> ITransferable
+IAsyncVault -up-|> IERC7575
+IAsyncVault -up-|> IVaultDepositCallbacks
+IAsyncVault -up-|> IVaultRedeemCallbacks
+
+class Vault
+class VaultFactory
+Vault .up.|> IAsyncVault : serves the ABI
+VaultFactory --> Vault : CREATE2 per position
+
+package plugins {
+    interface IRequestPolicy
+    interface IInstantPolicy
+    interface ILiquidityRoute
+    interface ISettlementObserver
+    interface IVaultOracle
+
+    class PerInvestorPolicy
+    class PerRequestPolicy
+    class PerPeriodPolicy
+    class ReserveInstantPolicy
+    class BasinLiquidityRoute
+    class VaultLiquidityRoute
+    class SpokeOracle
+}
+
+PerInvestorPolicy -up-|> IRequestPolicy
+PerRequestPolicy -up-|> IRequestPolicy
+PerPeriodPolicy -up-|> IRequestPolicy
+ReserveInstantPolicy -up-|> IInstantPolicy
+BasinLiquidityRoute -up-|> ILiquidityRoute
+VaultLiquidityRoute -up-|> ILiquidityRoute
+SpokeOracle -up-|> IVaultOracle
+
+Vault --> IRequestPolicy
+Vault --> IInstantPolicy
+Vault --> ILiquidityRoute
+Vault --> ISettlementObserver
+Vault --> IVaultOracle
+
+package token {
+    interface IRoleHook
+}
+Vault ..> IRoleHook : share token's hook, role checks
+
+@enduml

@@ -1,0 +1,208 @@
+[profile.default]
+src = 'src'
+out = 'out'
+libs = ['lib']
+
+solc_version = "0.8.28"
+evm_version = "cancun"
+
+# forge 1.8.0-nightly flipped `isolate` to default true, which runs every top-level call as its own
+# transaction and so clears transient storage between them. Contracts that hold a transient lock
+# across calls (Accounting, the weiroll guards, TransientArrayLib) and the tests written against
+# them depend on the old behavior, so pin it rather than rewrite them.
+isolate = false
+
+optimizer = true
+optimizer_runs = 1
+verbosity = 3
+
+ffi = true
+fs_permissions = [
+  # env/ is read-only on purpose: the one thing that writes a network config is a jq merge behind ffi, so a
+  # test or a stray script cannot rewrite one through a cheatcode
+  { access = "read", path = "env" },
+  # The chain fixtures script/anvil/anvil.sh copies into env/anvil/ for a run, and the only configs this
+  # branch checks in: a reader has to reach them before a run has happened
+  { access = "read", path = "script/anvil/env" },
+  { access = "read-write", path = "snapshots" },
+  { access = "read", path = "out-ir" },
+  { access = "read", path = "out" },
+]
+
+# {@see {@link https://github.com/foundry-rs/foundry/issues/4060} }
+auto_detect_remappings = false
+
+# Whether to store the referenced sources in the metadata as literal data. Helps with verification
+use_literal_content = true
+
+# REVERT BEFORE MERGING (back to bytecode_hash = "none", cbor_metadata = false): the metadata is kept here only so
+# Echidna can attribute coverage when the cloud job builds with the default profile. The deploy gate commits to the
+# init code hash, so production builds must stay free of the machine-dependent metadata hash.
+bytecode_hash = "ipfs"
+cbor_metadata = true
+
+# Deployment specific settings
+gas_reports = ["*"]
+gas_reports_ignore = ["test/*", "script/*"]
+gas_snapshot_check = false
+
+# False-alarm warnings
+ignored_warnings_from = [
+  "src/misc/ReentrancyProtection.sol", # Issue: https://github.com/ethereum/solidity/issues/14359
+]
+# Forge's defaults, plus too-many-warnings (4591): code-size warnings on oversized test and script contracts push
+# solc past its 256-warning cap. Solc emits them during codegen, after the analysis warnings, so the overflow
+# drops size warnings, not analysis ones like unused variables
+ignored_error_codes = ["license", "code-size", "init-code-size", "transient-storage", "too-many-warnings"]
+
+dynamic_test_linking = false # crytic-compile can't resolve foundry-pp/DeployHelper*.sol virtual stubs
+
+[profile.default.lint]
+severity = ["high"]
+# 1.8.0-nightly runs the linter as a post-build step and `forge build --deny warnings` is a CI
+# gate, so three more rules are excluded here. arbitrary-send-eth (390 hits) fires on code that
+# forwards msg.value to a caller-named refund address, the protocol's deliberate payment shape,
+# and on tests that fund a call. encode-packed-collision (97 hits) is confined to script/ and
+# test/, none in src/. reentrancy-eth has a single hit, Gateway.withBatch's callback, which is
+# guarded by _batcher/CallbackWasNotLocked and covered by testErrReentrantBatchCreation*.
+# arbitrary-send-erc20 (24 hits) fires where the vault pulls from an `owner` it has already
+# authorised, or from a fee source that approved it. Turning four rules off wholesale is a
+# blunt way to land the toolchain bump; adopting forge lint properly deserves its own pass.
+exclude_lints = [
+  "erc20-unchecked-transfer",
+  "incorrect-shift",
+  "arbitrary-send-eth",
+  "encode-packed-collision",
+  "reentrancy-eth",
+  "arbitrary-send-erc20",
+]
+
+[profile.default.fuzz]
+runs = 100
+max_test_rejects = 1_000_000 # Number of times `vm.assume` can fail
+
+[profile.default.invariant]
+runs = 10
+depth = 100
+call_override = false
+fail_on_revert = false
+
+# Stateful invariant runs, reached with `FOUNDRY_PROFILE=invariant`. Wider and shallower than the default
+# profile's settings: the invariants under test/invariant/ are looking for a short mis-ordered sequence, so
+# many independent runs find one sooner than a few deep ones. Reverting calls still consume a step, which is
+# why every handler swallows its own reverts rather than leaning on fail_on_revert.
+[profile.invariant.invariant]
+runs = 256
+depth = 25
+call_override = false
+fail_on_revert = false
+
+# Every network reachable by `--rpc-url <alias>` on the CLI and `vm.rpcUrl(<alias>)` in Solidity, so that
+# building a URL out of a base and an API key happens in exactly one place. Aliases match the network names
+# under env/<environment>/, which is how NetworkConfigLib.rpcUrl (a live-branch consumer) resolves one from
+# a loaded config. Interpolation is lazy: a missing API key only fails the run that reaches for it.
+[rpc_endpoints]
+# Local chains brought up by script/anvil/anvil.sh, one per chain
+local-a = "http://localhost:8545"
+local-b = "http://localhost:8546"
+
+# What `--verify` needs, per chain, so a deployment run carries no verification flags. Etherscan's v2 API
+# takes one key for every chain it covers; the chains it does not are on Blockscout-compatible explorers,
+# reached through an explicit url. Entries are matched by chain id, names mirror [rpc_endpoints].
+[etherscan]
+
+
+[profile.echidna]
+dynamic_test_linking = false # Enabling this would lead to foundry-pp/DeployHelper*.sol files that crytic-compile can't resolve
+# Override bytecode_hash for fuzzer coverage: "none" causes crytic-compile to treat every
+# sequence as new coverage (metadata hash instability), leading to unbounded corpus growth and OOM.
+# Production builds (default profile) keep "none" for deterministic bytecode.
+bytecode_hash = "ipfs"
+cbor_metadata = true
+# Inlining every transitive source into each contract's metadata is a verification aid with no bearing on
+# fuzzing, and it dominates build-info size, which `recon-generate info` must read as one Node string (512 MB max).
+use_literal_content = false
+
+[profile.medusa]
+dynamic_test_linking = false
+bytecode_hash = "ipfs"
+cbor_metadata = true
+
+# Compile weiroll VM with via_ir (stack-depth workaround)
+[profile.ir]
+src = "src-ir"
+test = "test-ir"
+script = "script-ir"
+libs = ["lib"]
+out = "out-ir"
+via_ir = true
+solc_version = "0.8.28"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 1
+bytecode_hash = "none"
+cbor_metadata = false
+auto_detect_remappings = false
+
+[profile.ci.fuzz]
+runs = 1000
+max_test_rejects = 1_000_000 # Number of times `vm.assume` can fail
+
+[profile.ci.invariant]
+runs = 100
+depth = 1000
+call_override = false
+fail_on_revert = false
+
+[profile.ci-coverage]
+verbosity = 2
+no_match_coverage = "test/spoke/fuzzing/**/*.sol"
+
+[profile.ci-coverage.fuzz]
+runs = 512                # 2x of default
+max_test_rejects = 65_536 # default value
+
+[profile.smt.model_checker]
+engine = "chc" # constrained Horn clauses
+invariants = ["contract", "reentrancy"]
+show_unproved = true
+timeout = 100_000 # in milliseconds, per solving query
+targets = [
+  "assert",
+  "constantCondition",
+  "divByZero",
+  "outOfBounds",
+  "overflow",
+  "underflow",
+]
+
+[profile.smt.model_checker.contracts]
+  "src/spoke/Spoke.sol" = ["Spoke"]
+  "src/spoke/Escrow.sol" = ["Escrow"]
+  "src/spoke/Root.sol" = ["Root"]
+  "src/spoke/ERC20.sol" = ["ERC20"]
+  "src/spoke/ShareToken.sol" = ["ShareToken"]
+  "src/spoke/FullRestrictions.sol" = ["FullRestrictions"]
+  "src/spoke/admin/Guardian.sol" = ["Guardian"]
+
+[doc]
+ignore = ["**/*.t.sol", "**/*.s.sol"]
+out = "docs"
+repository = "https://github.com/centrifuge/asset-pools"
+
+[fmt]
+line_length = 120
+tab_width = 4
+bracket_spacing = false
+int_types = "long"
+multiline_func_header = "attributes_first"
+quote_style = "double"
+number_underscore = "preserve"
+wrap_comments = false
+ignore = [
+  "test/*.sol",
+  # Core is not changed on this branch; these two are formatted the way the pinned v1.4.4 formats them,
+  # which the nightly formatter this branch needs would rewrap
+  "src/core/messaging/MessageDispatcher.sol",
+  "src/core/libraries/PricingLib.sol"
+]

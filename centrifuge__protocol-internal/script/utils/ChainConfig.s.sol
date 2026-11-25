@@ -1,0 +1,1164 @@
+// SPDX-License-Identifier: BUSL-1.1
+pragma solidity 0.8.28;
+
+import {EnvConnections, Connection, LAYERZERO, AXELAR, CHAINLINK, HYPERLANE} from "./ConnectionsConfig.s.sol";
+
+import "forge-std/Vm.sol";
+
+import {AdapterConnections} from "../../src/deployment/ActionBatchers.sol";
+import {UlnConfig, SetConfigParam} from "../../src/deployment/interfaces/ILayerZeroEndpointV2Like.sol";
+
+// Deploy-time types, here because their builders are: `adapterConnections()` and
+// `buildLayerZeroConfigParams()` each have exactly one caller, `LaunchDeployer`, which stays on the base
+// branch — so these belong here, not on `live`
+
+Vm constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
+/// @dev No caller on the base branch: the live branch's `VerifyFactoryContracts` and spell validators are
+///      the consumers. Kept here for the same reason `configRoots()` lists environments this branch does
+///      not populate — the schema of what a config offers belongs with the schema, not with whoever
+///      happens to read it. The same holds for `etherscanApiKey`, `rpcUrl`, `verifiers`, `graphQLApi` and
+///      `prettyEnvString` below: zero base-branch callers, deleting any of them breaks the live branch.
+library GraphQLConstants {
+    string internal constant MAINNET_API = "https://api.centrifuge.io";
+    string internal constant TESTNET_API = "https://api-v3-test.cfg.embrio.tech";
+}
+
+struct NetworkConfig {
+    uint256 chainId;
+    // The directory this config sits in, restated: `testnet`, or `testnet-rev2` for a second deployment of
+    // the same chains beside the first. `deploymentId` below is the part after the first `-`, and
+    // `baseEnvironment()` the part before it — the two are derived from this one string, never stated apart
+    string environment;
+    string name;
+    uint16 centrifugeId;
+    address protocolAdmin;
+    address opsAdmin;
+    // Account whose namespace in the DeployGate the deployment lives in, which every address on this chain
+    // derives from alongside the salt. Mandatory: it can never be replaced, and a run that guessed it
+    // wrong would deploy a whole protocol at addresses nobody meant. It is not the protocol admin — the
+    // two answer different questions, and a chain is free to point them at different accounts
+    address namespace;
+    // Which deployment this is, among the several one namespace could put on this chain. Derived from
+    // `environment`, never parsed: empty for the canonical one, and folded into every version otherwise, so
+    // two deployments under two ids occupy two disjoint sets of addresses. Mainnet is no exception — the
+    // canonical deployment there is the id-less one, but nothing here keeps a rev off it
+    string deploymentId;
+    uint8 batchLimit;
+    // Whether the chain takes the spoke half of the Vault Development Kit, opt-in. Only where EIP-7907 is
+    // active, `VaultFactory` being over EIP-170
+    bool vaults;
+    // `.network.baseRpcUrl` is deliberately not here: the RPC URL a script connects with comes from
+    // foundry.toml's [rpc_endpoints], which check_foundry_networks.py derives from that field, alongside the
+    // configs. Parsing it again would be a second way to build the same URL, and the two would drift
+    //
+    // Two explorer URLs, because they are two different services. `verifierUrl` is where source is SUBMITTED
+    // for verification — for the Blockscout-family explorers that is a write-only endpoint that rejects
+    // every read. `explorerApiUrl` is where chain data is READ back, which is what the verification flow
+    // asks when checking whether a contract is verified already. They coincide on Etherscan, and on
+    // Blockscout instances exposing an Etherscan-compatible /api, which is why one field served both for so
+    // long; they diverge on explorers whose verification endpoint rejects every read
+    //
+    // These three are the single-explorer form. A network verifying on several explorers names them in
+    // `.network.verifiers` instead, which leaves these at their defaults, so it is read through
+    // `config.network.verifiers()`: an array of structs holding strings cannot be copied from memory to
+    // storage, and scripts keep their config in storage
+    string verifier;
+    string verifierUrl;
+    string explorerApiUrl;
+}
+
+/// @notice One explorer a network's contracts are verified on. A network names several when its users
+///         look at more than one explorer, since none of them share verifications with each other.
+struct VerifierConfig {
+    // Label for logs; defaults to `verifier`, or `etherscan` if that is empty
+    string name;
+    // What `forge verify-contract --verifier` takes. Empty means Etherscan
+    string verifier;
+    // See `NetworkConfig` for why these are two URLs
+    string verifierUrl;
+    string explorerApiUrl;
+    // Passes `--skip-is-verified-check` to forge, for an explorer whose read endpoint forge's own HTTP
+    // client cannot reach while curl can; the verification run's own curl-based check still runs before
+    bool skipIsVerifiedCheck;
+}
+
+struct LayerZeroConfig {
+    address endpoint;
+    uint32 layerZeroEid;
+    bool deploy;
+    uint8 blockConfirmations;
+    address[] requiredDVNs;
+    address[] optionalDVNs;
+    uint8 optionalDVNThreshold;
+}
+
+struct AxelarConfig {
+    string axelarId;
+    address gateway;
+    address gasService;
+    bool deploy;
+}
+
+struct ChainlinkConfig {
+    uint64 chainSelector;
+    address ccipRouter;
+    bool deploy;
+}
+
+struct HyperlaneConfig {
+    uint32 hyperlaneId;
+    address mailbox;
+    address ism;
+    bool deploy;
+}
+
+struct AdaptersConfig {
+    LayerZeroConfig layerZero;
+    AxelarConfig axelar;
+    ChainlinkConfig chainlink;
+    HyperlaneConfig hyperlane;
+}
+
+/// @notice What a chain *is*, as `env/<environment>/<network>.json` describes it: the chain itself and the messaging
+///         it takes part in. Nothing here assumes the protocol is deployed on it, which is why a script
+///         that brings a chain up from nothing (`LaunchDeployer`) reads this and not `EnvConfig`.
+struct ChainConfig {
+    NetworkConfig network;
+    AdaptersConfig adapters;
+}
+
+using NetworkConfigLib for NetworkConfig global;
+using ChainConfigLib for ChainConfig global;
+
+/// @notice Loads the structural half of an env/<environment>/<network>.json
+library Chains {
+    /// @notice Every directory a config can sit in, in the order they are searched.
+    ///
+    /// @dev    One per `.network.environment`, plus the fixtures describing the local chains
+    ///         `script/anvil/anvil.sh` brings up — those are checked in beside the script that uses them
+    ///         and copied into `env/anvil-<id>/` for a run, so both places hold configs and the copy wins.
+    ///         Which base names a directory may carry is `environments()`.
+    function configRoots() internal view returns (string[] memory roots) {
+        Vm.DirEntry[] memory entries = entriesOf("env/");
+
+        uint256 found;
+        string[] memory all = new string[](entries.length + 1);
+        for (uint256 i; i < entries.length; i++) {
+            if (!entries[i].isDir) continue;
+
+            string memory dir = vm.replace(entries[i].path, string.concat(vm.projectRoot(), "/"), "");
+            // `env/spell/` is the executed-spell archive, not an environment
+            if (!isEnvironment(baseEnvironmentOf(_basename(dir)))) continue;
+
+            all[found++] = string.concat(dir, "/");
+        }
+
+        all[found++] = FIXTURE_ROOT;
+
+        roots = new string[](found);
+        for (uint256 i; i < found; i++) {
+            roots[i] = all[i];
+        }
+    }
+
+    /// @notice The environments a directory under `env/` may be named after, before its deployment id.
+    ///
+    /// @dev    `mainnet` and `testnet` are populated only on the `live` branch: those deployments are made
+    ///         from there, and their configs live with them. They are listed here regardless, because what
+    ///         a config *is* belongs to the schema and which directories carry one is the branch's
+    ///         business. Validating against the list is what keeps a typo — `env/tesnet-rev2/` — from
+    ///         quietly becoming an environment of its own: `configRoots()` leaves such a directory out, and
+    ///         `ChainConfigDirectoryTest` is what turns one that is checked in into a failure.
+    function environments() internal pure returns (string[] memory names) {
+        names = new string[](3);
+        names[0] = "mainnet";
+        names[1] = "testnet";
+        names[2] = FIXTURE_ENVIRONMENT;
+    }
+
+    /// @notice Whether a base environment is one `environments()` lists
+    function isEnvironment(string memory base) internal pure returns (bool) {
+        string[] memory names = environments();
+        for (uint256 i; i < names.length; i++) {
+            if (keccak256(bytes(names[i])) == keccak256(bytes(base))) return true;
+        }
+        return false;
+    }
+
+    function _slice(string memory value, uint256 from, uint256 to) private pure returns (string memory) {
+        bytes memory raw = bytes(value);
+        bytes memory out = new bytes(to - from);
+        for (uint256 i; i < out.length; i++) {
+            out[i] = raw[from + i];
+        }
+        return string(out);
+    }
+
+    /// @dev Last path segment, the directory's own name
+    function _basename(string memory path) private pure returns (string memory) {
+        string[] memory parts = vm.split(path, "/");
+        return parts[parts.length - 1];
+    }
+
+    /// @dev What `vm.indexOf` answers when the key is not in the string
+    uint256 private constant NOT_FOUND = type(uint256).max;
+
+    /// @dev The local chains' fixtures, the one config root that is not an environment directory: they are
+    ///      the template `anvil.sh` copies into `env/anvil-<id>/` for a run, so they are read when no run
+    ///      has copied them yet and shadowed by the copy when one has
+    string internal constant FIXTURE_ROOT = "script/anvil/env/";
+
+    /// @dev The environment the fixtures declare, and the base of the one a local run's copies declare
+    string internal constant FIXTURE_ENVIRONMENT = "anvil";
+
+    /// @notice Loads the config of the chain the run is pointed at, resolved by chain id: every network
+    ///         config names its chainId and they are unique, so `--rpc-url <network>` is the only input a
+    ///         script needs, and the one that decides both where it connects and what it reads.
+    function load() internal view returns (ChainConfig memory config) {
+        return load(detect());
+    }
+
+    /// @notice The raw JSON of a network's config, for `Env` to parse both halves out of one read of its
+    ///         own. (`pathOf` probes by reading, so the winning file is read twice end to end — measured at
+    ///         well under a percent of the gas limit across a full deployer walk, and left that way.)
+    function jsonOf(string memory network) internal view returns (string memory) {
+        return _jsonAt(pathOf(network));
+    }
+
+    /// @notice Same, read from one deployment — see `pathOf(network, environment)`
+    function jsonOf(string memory network, string memory environment) internal view returns (string memory) {
+        return _jsonAt(pathOf(network, environment));
+    }
+
+    function _jsonAt(string memory path) private view returns (string memory json) {
+        json = vm.readFile(path);
+
+        _assertDirectoryRestatesTheEnvironment(path, json);
+    }
+
+    /// @dev A config's `.network.environment` names the directory it sits in, deployment id and all, so the
+    ///      two can be checked against each other on every read — which is the whole point of stating it
+    ///      twice. Renaming a directory without editing the field, or copying a rev without editing it,
+    ///      would otherwise move every address the chain deploys to and say nothing. The fixtures are
+    ///      exempt: they are a template, not a deployment, and live outside `env/` for that reason.
+    function _assertDirectoryRestatesTheEnvironment(string memory path, string memory json) private pure {
+        if (vm.indexOf(path, FIXTURE_ROOT) == 0) return;
+
+        string memory environment = vm.parseJsonString(json, ".network.environment");
+        string memory expected = string.concat("env/", environment, "/");
+
+        require(
+            vm.indexOf(path, expected) == 0,
+            string.concat("Config at ", path, " says it belongs to environment ", environment)
+        );
+    }
+
+    /// @notice Where a network's config lives, which is `env/<environment>/<network>.json` — the directory
+    ///         restates what the config's own `.network.environment` says, so that a glob can pick out one
+    ///         environment without opening every file.
+    ///
+    /// @dev    Resolved by looking rather than by rule, because the name is all a caller has and the
+    ///         environment is inside the file it is trying to find. Every root `configRoots()` names is
+    ///         probed — there is no flat `env/<network>.json` form left: `detect()` and the directory walks
+    ///         all strip the root, so a name never carries a directory.
+    function pathOf(string memory network) internal view returns (string memory) {
+        // The name is the primary key a run is addressed by, so it may resolve to exactly one config: the
+        // first hit is only taken after the remaining roots are checked, because a name present in two
+        // environments would otherwise silently answer with the wrong chain's admins and addresses —
+        // `detect()` warns that exact mistake does not fail. The one sanctioned shadow is a local run's
+        // copy in env/anvil-<id>/ over the fixture it was copied from, which are two files describing one chain.
+        string memory found;
+        string memory scope = _scope();
+        string[] memory roots = configRoots();
+        for (uint256 i; i < roots.length; i++) {
+            if (!inScope(roots[i], scope)) continue;
+
+            string memory nested = string.concat(roots[i], network, ".json");
+            if (!_readable(nested)) continue;
+
+            if (bytes(found).length == 0) {
+                found = nested;
+            } else if (_isFixtureShadow(found, nested)) {
+                // The run's own copy answers, never the template it came from, whichever was seen first
+                if (vm.indexOf(found, FIXTURE_ROOT) == 0) found = nested;
+            } else {
+                revert(string.concat("Ambiguous network name ", network, ": ", found, " and ", nested));
+            }
+        }
+        if (bytes(found).length != 0) return found;
+
+        revert(string.concat("No env config named ", network, ": expected env/<environment>/", network, ".json"));
+    }
+
+    /// @notice Where a network's config lives inside one deployment, which is a rule and not a search:
+    ///         `rootOf(environment)` and the name. A deployment that does not carry the name has no config
+    ///         for it — never another deployment's, however it is filed.
+    ///
+    /// @dev    What a read that already knows its deployment uses, instead of the process-wide variable —
+    ///         and stricter than it, deliberately. `DEPLOY_ENVIRONMENT` *narrows*: it hides the siblings of
+    ///         the deployment it names and leaves every other base environment readable, which is right for
+    ///         the one config a run is addressed by and wrong for everything read off that config. A
+    ///         config's peers are the names its own connections file lists, and that file is the
+    ///         deployment's, so a peer is read from that directory or not at all: a testnet wired to a name
+    ///         only `env/mainnet/` carries has a broken connections file, and answering it with the mainnet
+    ///         config would build a testnet's batch limits and adapter wiring out of mainnet's centrifugeId
+    ///         and addresses. Same for a test walking every directory, which reads each config under the one
+    ///         it sits in — what lets two deployments of the same chains be checked in side by side.
+    function pathOf(string memory network, string memory environment) internal view returns (string memory) {
+        string memory path = string.concat(rootOf(environment), network, ".json");
+
+        require(
+            _readable(path),
+            string.concat("No config named ", network, " in environment ", environment, ": expected ", path)
+        );
+
+        return path;
+    }
+
+    /// @dev The environment a run is confined to, or nothing. `DEPLOY_ENVIRONMENT` is what a run says when a
+    ///      chain is described more than once — `env/testnet/` beside `env/testnet-rev2/` — and needs to
+    ///      name which of the two it means. Unset until that happens. It settles that one question and no
+    ///      other: the directories of *other* base environments stay readable, so `DEPLOY_ENVIRONMENT=
+    ///      testnet-rev2` hides `env/testnet/` and leaves `env/mainnet/` where it was. Read and checked once
+    ///      per walk, not once per root.
+    ///
+    ///      A value naming no directory under `env/` is refused rather than left to filter every root out —
+    ///      the run would otherwise fail on "no config for this chain" with the cause sitting in the
+    ///      environment. (Named `DEPLOY_ENVIRONMENT` and not `ENVIRONMENT` for the same reason: the shorter
+    ///      one is what shells and CI runners export for their own purposes, and it would trip this.)
+    function _scope() private view returns (string memory) {
+        string memory only = vm.envOr("DEPLOY_ENVIRONMENT", string(""));
+        if (bytes(only).length == 0) return "";
+
+        require(
+            isEnvironment(baseEnvironmentOf(only)) && entriesOf(string.concat("env/", only, "/")).length > 0,
+            string.concat("DEPLOY_ENVIRONMENT=", only, " names no directory under env/: unset it, or point it at one")
+        );
+        return only;
+    }
+
+    /// @notice Whether a root is in the scope `_scope()` answered: every root of another base environment, and
+    ///         of this one only the directory named. The fixtures stay in scope either way: they are the
+    ///         template a local run's copy shadows.
+    /// @dev    Internal rather than private for the table test in `ChainConfig.t.sol`: it decides which
+    ///         deployment's addresses a run reads, and the environment variable it answers for is process-wide,
+    ///         so the rule is checked as the pure function it is rather than through `pathOf`
+    function inScope(string memory root, string memory scope) internal pure returns (bool) {
+        if (bytes(scope).length == 0 || vm.indexOf(root, FIXTURE_ROOT) == 0) return true;
+
+        string memory environment = environmentOf(root);
+        if (keccak256(bytes(baseEnvironmentOf(environment))) != keccak256(bytes(baseEnvironmentOf(scope)))) {
+            return true;
+        }
+        return keccak256(bytes(environment)) == keccak256(bytes(scope));
+    }
+
+    /// @notice The environment a config root holds, deployment id and all: `env/testnet-rev2/` is
+    ///         `testnet-rev2`, and the fixture root is the environment the fixtures declare. What a walk over
+    ///         `configRoots()` reads each root's configs under.
+    function environmentOf(string memory root) internal pure returns (string memory) {
+        if (vm.indexOf(root, FIXTURE_ROOT) == 0) return FIXTURE_ENVIRONMENT;
+
+        // The segment after `env/`, not everything that is not `env/` — `vm.replace` strips every
+        // occurrence, and an id may end in `env`
+        return vm.split(root, "/")[1];
+    }
+
+    /// @notice The root an environment's configs sit in, `environmentOf` the other way round:
+    ///         `testnet-rev2` is `env/testnet-rev2/`, and the environment the fixtures declare is the one
+    ///         root outside `env/`. What a read that names its deployment resolves through, rather than
+    ///         probing every root for the name.
+    ///
+    /// @dev    A rule, not a lookup: it answers for a directory that is not there — which is what makes
+    ///         `pathOf(network, environment)` say which file it wanted, and keeps a deployment whose
+    ///         directory is missing from quietly resolving through someone else's.
+    function rootOf(string memory environment) internal pure returns (string memory) {
+        if (keccak256(bytes(environment)) == keccak256(bytes(FIXTURE_ENVIRONMENT))) return FIXTURE_ROOT;
+
+        return string.concat("env/", environment, "/");
+    }
+
+    /// @dev Whether two hits for one name are the sanctioned pair: a run's copy under `env/anvil-<id>/` and
+    ///      the fixture under `script/anvil/env/` it was copied from, in either order — `configRoots()`
+    ///      lists the directories as the filesystem hands them over, so neither comes first reliably. Only
+    ///      a local run's directory may shadow a fixture: a config of the same name under any other
+    ///      environment is a real collision, and is reported as one.
+    function _isFixtureShadow(string memory first, string memory second) private pure returns (bool) {
+        if (vm.indexOf(first, FIXTURE_ROOT) == 0) return _isLocalRun(second);
+        if (vm.indexOf(second, FIXTURE_ROOT) == 0) return _isLocalRun(first);
+        return false;
+    }
+
+    /// @dev Whether a config path sits in a local run's directory, `env/anvil-<id>/<network>.json`: the
+    ///      environment the fixtures declare, whatever id the run added to it
+    function _isLocalRun(string memory path) private pure returns (bool) {
+        string[] memory parts = vm.split(path, "/");
+        if (parts.length < 3 || keccak256(bytes(parts[0])) != keccak256("env")) return false;
+
+        return keccak256(bytes(baseEnvironmentOf(parts[1]))) == keccak256(bytes(FIXTURE_ENVIRONMENT));
+    }
+
+    /// @notice Where an environment's connections file lives, beside the configs it connects.
+    ///
+    /// @dev    `env/<environment>/` first, then a root that is not under `env/` at all — the fixtures, which
+    ///         hold one environment's chains and its connections file together. Only the `env/` root named
+    ///         after the environment can answer for it, or a testnet run would read mainnet's connections.
+    function connectionsPathOf(string memory environment) internal view returns (string memory) {
+        string memory owned = string.concat("env/", environment, "/connections.json");
+        if (_readable(owned)) return owned;
+
+        string[] memory roots = configRoots();
+        for (uint256 i; i < roots.length; i++) {
+            if (vm.indexOf(roots[i], "env/") == 0) continue;
+            // A fixture root answers only for the environment its own chains declare — the directory names
+            // it (`script/anvil/env/` for anvil). Without this, a mainnet run whose connections file went
+            // missing would silently read the two-chain local topology instead of reverting below
+            if (vm.indexOf(roots[i], string.concat("/", environment, "/")) == NOT_FOUND) continue;
+
+            string memory fixturePath = string.concat(roots[i], "connections.json");
+            if (_readable(fixturePath)) return fixturePath;
+        }
+
+        revert(string.concat("No connections file for environment ", environment));
+    }
+
+    /// @notice What a config root holds, or nothing when the root is not there — `env/anvil-<id>/` exists only
+    ///         after a local run, and `env/testnet/` only on the branch that owns those deployments.
+    function entriesOf(string memory root) internal view returns (Vm.DirEntry[] memory) {
+        try vm.readDir(root) returns (Vm.DirEntry[] memory entries) {
+            return entries;
+        } catch {
+            return new Vm.DirEntry[](0);
+        }
+    }
+
+    /// @dev `vm.exists` would read better, but it is not a view cheatcode, and making this whole stack
+    ///      non-view to ask whether a file is there would reach every script that loads a config
+    function _readable(string memory path) private view returns (bool) {
+        try vm.readFile(path) returns (string memory) {
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function load(string memory network) internal view returns (ChainConfig memory) {
+        return parse(jsonOf(network), network);
+    }
+
+    /// @notice Same, read from one deployment — see `pathOf(network, environment)`
+    function load(string memory network, string memory environment) internal view returns (ChainConfig memory) {
+        return parse(jsonOf(network, environment), network);
+    }
+
+    /// @notice Same, from JSON already read: what `Env` uses so a full load opens the file once
+    function parse(string memory json, string memory network) internal pure returns (ChainConfig memory config) {
+        config.network = _parseNetworkConfig(json);
+        config.network.name = network;
+        config.network.deploymentId = deploymentIdOf(config.network.environment);
+        config.adapters = _parseAdaptersConfig(json);
+    }
+
+    /// @notice What an environment names beyond the base one: `testnet-rev2` is `rev2`, `testnet` is
+    ///         nothing. Split at the first `-`, so an id may hold as many as it likes.
+    function deploymentIdOf(string memory environment) internal pure returns (string memory) {
+        uint256 dash = vm.indexOf(environment, "-");
+        if (dash == NOT_FOUND) return "";
+
+        return _slice(environment, dash + 1, bytes(environment).length);
+    }
+
+    /// @notice The environment a deployment belongs to whatever id it carries: `testnet-rev2` is `testnet`.
+    ///         What decides policy — mainnet is mainnet however many deployments it holds — while the whole
+    ///         string decides where the config lives.
+    function baseEnvironmentOf(string memory environment) internal pure returns (string memory) {
+        uint256 dash = vm.indexOf(environment, "-");
+        if (dash == NOT_FOUND) return environment;
+
+        return _slice(environment, 0, dash);
+    }
+
+    /// @notice The `Root` a config records under `.contracts`, or zero where it records none.
+    /// @dev    The JSON-taking half of `ChainConfigLib.rootAddress`, as `parse` is of `load`.
+    ///
+    ///         Only a missing `.contracts.root` returns zero. If the key is there but the address cannot be
+    ///         read — a typo, a truncated value, a zero left as a placeholder — this reverts, since the
+    ///         config means to keep a Root and returning zero would deploy a second one beside it.
+    function parseRootAddress(string memory json) internal view returns (address) {
+        if (!vm.keyExistsJson(json, ".contracts.root")) return address(0);
+
+        address root = vm.parseJsonAddress(json, ".contracts.root.address");
+        require(root != address(0), "config records a zero Root: delete .contracts.root to deploy one");
+
+        return root;
+    }
+
+    /// @notice The network name `block.chainid` belongs to. Walks every root `configRoots()` names — so a
+    ///         local run's copies under env/anvil-<id>/ and the fixtures they came from are both reachable — and
+    ///         skips anything that is not a network config (the connections files carry no chainId).
+    ///
+    /// @dev    There is deliberately no override: the chain the RPC points at is the single source of truth,
+    ///         so a script cannot be pointed at one chain while reading another's addresses. A script that
+    ///         has to choose a network *before* it has a chain — one that reads a config to know where to
+    ///         fork — passes the name to `load(name)` instead.
+    function detect() internal view returns (string memory) {
+        return _detectIn(_rootsInScope(_scope()));
+    }
+
+    /// @notice Same, read from one deployment — see `pathOf(network, environment)`: only that deployment's
+    ///         root is walked, so the answer is a chain it describes itself. What a walk over every
+    ///         deployment asks, one directory at a time, where the run itself asks `detect()` and lets
+    ///         `DEPLOY_ENVIRONMENT` settle which one it is for.
+    function detect(string memory environment) internal view returns (string memory) {
+        string[] memory roots = new string[](1);
+        roots[0] = rootOf(environment);
+
+        return _detectIn(roots);
+    }
+
+    /// @dev The roots a walk is left with, `configRoots()` narrowed by what `DEPLOY_ENVIRONMENT` said —
+    ///      taken before the walk rather than inside it, so `_detectIn` reasons over a list and not over a
+    ///      list plus the rule that made it
+    function _rootsInScope(string memory scope) private view returns (string[] memory kept) {
+        string[] memory roots = configRoots();
+
+        uint256 found;
+        string[] memory all = new string[](roots.length);
+        for (uint256 i; i < roots.length; i++) {
+            if (inScope(roots[i], scope)) all[found++] = roots[i];
+        }
+
+        kept = new string[](found);
+        for (uint256 i; i < found; i++) {
+            kept[i] = all[i];
+        }
+    }
+
+    function _detectIn(string[] memory roots) private view returns (string memory) {
+        // readDir answers with absolute paths; everything below reasons relative to the project root
+        string memory root = string.concat(vm.projectRoot(), "/");
+
+        string memory name;
+        string memory foundAt;
+
+        for (uint256 r; r < roots.length; r++) {
+            Vm.DirEntry[] memory entries = entriesOf(roots[r]);
+            for (uint256 i; i < entries.length; i++) {
+                if (entries[i].isDir) continue;
+
+                string memory path = vm.replace(entries[i].path, root, "");
+                if (!_isJson(path)) continue;
+
+                string memory json = vm.readFile(entries[i].path);
+                if (!vm.keyExistsJson(json, ".network.chainId")) continue;
+                if (vm.parseJsonUint(json, ".network.chainId") != block.chainid) continue;
+
+                // The directory a config sits in restates its own `.network.environment`, so the name is
+                // just the file: `local-a`, whether it is filed under an environment or copied in as a fixture
+                string memory here = vm.replace(vm.replace(path, roots[r], ""), ".json", "");
+
+                // A second answer is not a tie to break: one of them is a deployment the run did not mean,
+                // and picking either silently is how a rev gets deployed over. The fixtures are the one
+                // sanctioned pair, being the template a run's own copy came from
+                if (bytes(foundAt).length != 0 && !_isFixtureShadow(foundAt, path)) {
+                    revert(
+                        string.concat(
+                            "Chain ",
+                            vm.toString(block.chainid),
+                            " is described by ",
+                            foundAt,
+                            " and ",
+                            path,
+                            ": pass DEPLOY_ENVIRONMENT=<environment> to say which deployment this run is for.",
+                            " That tells apart deployments of one environment only; if these two are of",
+                            " different environments, one of the configs is wrong"
+                        )
+                    );
+                }
+
+                if (bytes(foundAt).length == 0) (name, foundAt) = (here, path);
+            }
+        }
+
+        if (bytes(foundAt).length != 0) return name;
+
+        revert(
+            string.concat(
+                "No env config for chain ",
+                vm.toString(block.chainid),
+                ": add env/<environment>/<network>.json naming that chainId (the environment must be one",
+                " environments() lists), and point --rpc-url at it. A set DEPLOY_ENVIRONMENT hides only the other",
+                " deployments of its own environment; every other environment stays in the search"
+            )
+        );
+    }
+
+    /// @dev The only filter the walk needs, and it is not optional: `keyExistsJson` *reverts* on anything
+    ///      that is not JSON, so a stray non-JSON file would end the walk rather than be skipped by it.
+    ///      Everything else that parses — a connections file — has no `.network.chainId` and falls out below.
+    ///      Anchored to the end, so a `.json.bak` left lying around is not read as a config.
+    function _isJson(string memory path) private pure returns (bool) {
+        uint256 at = vm.indexOf(path, ".json");
+        return at != NOT_FOUND && at == bytes(path).length - 5;
+    }
+
+    function _parseNetworkConfig(string memory json) private pure returns (NetworkConfig memory config) {
+        config.chainId = vm.parseJsonUint(json, ".network.chainId");
+        config.environment = vm.parseJsonString(json, ".network.environment");
+        config.centrifugeId = uint16(vm.parseJsonUint(json, ".network.centrifugeId"));
+        config.protocolAdmin = vm.parseJsonAddress(json, ".network.protocolAdmin");
+        config.opsAdmin = vm.parseJsonAddress(json, ".network.opsAdmin");
+        config.namespace = vm.parseJsonAddress(json, ".network.namespace");
+
+        // Read only when present, and then strictly: both decide what a launch deploys and what every peer's
+        // GasService lets through, so a mistyped key or a quoted value must fail the read rather than
+        // quietly launch with the default
+        string[] memory keys = vm.parseJsonKeys(json, ".network");
+        _requireKnownNetworkKeys(keys);
+
+        if (_contains(keys, "batchLimit")) {
+            uint256 batchLimit = vm.parseJsonUint(json, ".network.batchLimit");
+            require(batchLimit <= type(uint8).max, ".network.batchLimit is counted in millions and fits a uint8");
+            config.batchLimit = uint8(batchLimit);
+        }
+
+        if (_contains(keys, "vaults")) config.vaults = vm.parseJsonBool(json, ".network.vaults");
+
+        VerifierConfig memory verifier = _parseVerifierConfig(json, ".network", config.chainId);
+        config.verifier = verifier.verifier;
+        config.verifierUrl = verifier.verifierUrl;
+        config.explorerApiUrl = verifier.explorerApiUrl;
+    }
+
+    /// @notice The explorers a network verifies on: its `.network.verifiers` array, one entry per explorer, or
+    ///         the single-explorer form under `.network` when it names no array.
+    function verifiers(string memory json) internal view returns (VerifierConfig[] memory list) {
+        uint256 chainId = vm.parseJsonUint(json, ".network.chainId");
+
+        uint256 count;
+        while (vm.keyExistsJson(json, string.concat(".network.verifiers[", vm.toString(count), "]"))) count++;
+
+        if (count == 0) {
+            require(!vm.keyExistsJson(json, ".network.verifiers"), "network.verifiers names no explorer");
+            list = new VerifierConfig[](1);
+            list[0] = _parseVerifierConfig(json, ".network", chainId);
+            return list;
+        }
+
+        string[4] memory single = ["verifier", "verifierUrl", "explorerApiUrl", "skipIsVerifiedCheck"];
+        for (uint256 i; i < single.length; i++) {
+            require(
+                !vm.keyExistsJson(json, string.concat(".network.", single[i])),
+                string.concat("network.verifiers replaces network.", single[i], ": name it in each entry instead")
+            );
+        }
+
+        list = new VerifierConfig[](count);
+        for (uint256 i; i < count; i++) {
+            list[i] = _parseVerifierConfig(json, string.concat(".network.verifiers[", vm.toString(i), "]"), chainId);
+        }
+    }
+
+    function _parseVerifierConfig(string memory json, string memory path, uint256 chainId)
+        private
+        pure
+        returns (VerifierConfig memory config)
+    {
+        try vm.parseJsonString(json, string.concat(path, ".verifier")) returns (string memory val) {
+            config.verifier = val;
+        } catch {}
+
+        try vm.parseJsonString(json, string.concat(path, ".name")) returns (string memory val) {
+            config.name = val;
+        } catch {
+            config.name = bytes(config.verifier).length > 0 ? config.verifier : "etherscan";
+        }
+
+        // Etherscan's multichain v2 endpoint covers most chains by id, and is where both submission and
+        // reads go unless a network names something else
+        string memory etherscanV2 = string.concat("https://api.etherscan.io/v2/api?chainid=", vm.toString(chainId));
+
+        try vm.parseJsonString(json, string.concat(path, ".verifierUrl")) returns (string memory val) {
+            config.verifierUrl = val;
+        } catch {
+            // Forge is handed `--verifier-url` alongside any named verifier, so defaulting one that is not
+            // Etherscan would submit its sources to Etherscan
+            require(
+                bytes(config.verifier).length == 0 || keccak256(bytes(config.verifier)) == keccak256("etherscan"),
+                string.concat(path, ".verifier is ", config.verifier, ", which needs a verifierUrl")
+            );
+            config.verifierUrl = etherscanV2;
+        }
+
+        // Only read for explorers speaking the Etherscan dialect: a network verifying through Sourcify asks
+        // Sourcify whether a contract is verified, so this default is never reached for one.
+        //
+        // Only set where the explorer's read API is somewhere other than where verification is submitted.
+        // Falling back to Etherscan v2 rather than to `verifierUrl` is the point of keeping them apart: a
+        // network that names a write-only verification endpoint gets a working read URL by default, and one
+        // whose reads genuinely live elsewhere says so explicitly
+        try vm.parseJsonString(json, string.concat(path, ".explorerApiUrl")) returns (string memory val) {
+            config.explorerApiUrl = val;
+        } catch {
+            config.explorerApiUrl = etherscanV2;
+        }
+
+        try vm.parseJsonBool(json, string.concat(path, ".skipIsVerifiedCheck")) returns (bool val) {
+            config.skipIsVerifiedCheck = val;
+        } catch {}
+    }
+
+    /// @dev Every key `.network` may carry. The optional ones are read leniently below, which makes an unknown
+    ///      key the one mistake nothing else would catch: `"vault": true` would read as no vault stack at all.
+    ///      `baseRpcUrl` is parsed by nothing here but belongs to the schema (see `NetworkConfig`).
+    function _requireKnownNetworkKeys(string[] memory keys) private pure {
+        string[12] memory known = [
+            "chainId",
+            "environment",
+            "centrifugeId",
+            "protocolAdmin",
+            "opsAdmin",
+            "namespace",
+            "batchLimit",
+            "vaults",
+            "verifier",
+            "verifierUrl",
+            "explorerApiUrl",
+            "baseRpcUrl"
+        ];
+
+        for (uint256 i; i < keys.length; i++) {
+            bool found;
+            for (uint256 j; j < known.length && !found; j++) {
+                found = keccak256(bytes(keys[i])) == keccak256(bytes(known[j]));
+            }
+            require(found, string.concat("unknown key .network.", keys[i], ": check its spelling"));
+        }
+    }
+
+    function _contains(string[] memory keys, string memory key) private pure returns (bool) {
+        for (uint256 i; i < keys.length; i++) {
+            if (keccak256(bytes(keys[i])) == keccak256(bytes(key))) return true;
+        }
+        return false;
+    }
+
+    /// @dev Mirrors the invariants LayerZero's `UlnBase` enforces, so a malformed set fails when the config is
+    ///      read rather than as an opaque revert while wiring. Applied to the default set and to every override.
+    function _validateDvnSet(address[] memory requiredDVNs, address[] memory optionalDVNs, uint8 threshold)
+        private
+        pure
+    {
+        // Bound list lengths to the uint8 cap LayerZero stores them in. Without this, a 256+
+        // entry list would silently truncate via `uint8(...length)` in `encodeUlnConfig`,
+        // collapsing optional DVNs to NIL or undercounting required DVNs
+        require(requiredDVNs.length <= 255, "too many requiredDVNs (uint8 cap)");
+        require(optionalDVNs.length <= 255, "too many optionalDVNs (uint8 cap)");
+
+        // Enforce the ascending-sort invariant LayerZero UlnBase expects, for each list independently.
+        for (uint256 i = 1; i < requiredDVNs.length; i++) {
+            require(requiredDVNs[i - 1] < requiredDVNs[i], "requiredDVNs must be sorted in ascending order");
+        }
+        for (uint256 i = 1; i < optionalDVNs.length; i++) {
+            require(optionalDVNs[i - 1] < optionalDVNs[i], "optionalDVNs must be sorted in ascending order");
+        }
+        // Disjoint check: LayerZero's UlnBase allows overlap between required and optional lists,
+        // but a DVN appearing in both collapses our "distinct operators to forge" guarantee — it
+        // would be counted as both a required attestation and a slot of the optional threshold
+        for (uint256 i; i < requiredDVNs.length; i++) {
+            for (uint256 j; j < optionalDVNs.length; j++) {
+                require(requiredDVNs[i] != optionalDVNs[j], "DVN appears in both required and optional lists");
+            }
+        }
+        // Mirror UlnBase.LZ_ULN_InvalidOptionalDVNThreshold: 0 < threshold <= optionalDVNs.length
+        // (when optionalDVNs is empty, threshold must be 0).
+        if (optionalDVNs.length == 0) {
+            require(threshold == 0, "optionalDVNThreshold must be 0 when no optional DVNs");
+        } else {
+            require(
+                threshold > 0 && threshold <= optionalDVNs.length,
+                "optionalDVNThreshold must be in (0, optionalDVNs.length]"
+            );
+        }
+        // Mirror UlnBase.LZ_ULN_AtLeastOneDVN: at least one required DVN or a non-zero optional threshold.
+        require(
+            requiredDVNs.length > 0 || threshold > 0,
+            "Must have at least one required DVN or a non-zero optional threshold"
+        );
+    }
+
+    /// @notice The DVN set a config uses for its lane to `remote`, when it overrides its default one there.
+    ///
+    /// @dev    A chain whose DVN operators do not all run on a peer cannot share its default set with that
+    ///         peer: each end of a lane must name the same operators, at each chain's own addresses. The
+    ///         override is how the peer names the chain's operators for that one lane.
+    function dvnOverride(string memory json, string memory remote)
+        internal
+        pure
+        returns (bool found, address[] memory requiredDVNs, address[] memory optionalDVNs, uint8 threshold)
+    {
+        // Bracket form, so a network name containing a dash is not read as a path operator
+        string memory path = string.concat(".adapters.layerZero.dvnOverrides.['", remote, "']");
+        try vm.parseJsonAddressArray(json, string.concat(path, ".requiredDVNs")) returns (address[] memory required) {
+            return (
+                true,
+                required,
+                vm.parseJsonAddressArray(json, string.concat(path, ".optionalDVNs")),
+                uint8(vm.parseJsonUint(json, string.concat(path, ".optionalDVNThreshold")))
+            );
+        } catch {}
+    }
+
+    function _parseAdaptersConfig(string memory json) private pure returns (AdaptersConfig memory config) {
+        try vm.parseJsonBool(json, ".adapters.layerZero.deploy") returns (bool val) {
+            config.layerZero.deploy = val;
+        } catch {}
+
+        try vm.parseJsonBool(json, ".adapters.axelar.deploy") returns (bool val) {
+            config.axelar.deploy = val;
+        } catch {}
+
+        try vm.parseJsonBool(json, ".adapters.chainlink.deploy") returns (bool val) {
+            config.chainlink.deploy = val;
+        } catch {}
+
+        try vm.parseJsonBool(json, ".adapters.hyperlane.deploy") returns (bool val) {
+            config.hyperlane.deploy = val;
+        } catch {}
+
+        if (config.layerZero.deploy) {
+            config.layerZero.endpoint = vm.parseJsonAddress(json, ".adapters.layerZero.endpoint");
+            config.layerZero.layerZeroEid = uint32(vm.parseJsonUint(json, ".adapters.layerZero.layerZeroEid"));
+            config.layerZero.blockConfirmations =
+                uint8(vm.parseJsonUint(json, ".adapters.layerZero.blockConfirmations"));
+            config.layerZero.requiredDVNs = vm.parseJsonAddressArray(json, ".adapters.layerZero.requiredDVNs");
+            config.layerZero.optionalDVNs = vm.parseJsonAddressArray(json, ".adapters.layerZero.optionalDVNs");
+            config.layerZero.optionalDVNThreshold =
+                uint8(vm.parseJsonUint(json, ".adapters.layerZero.optionalDVNThreshold"));
+
+            _validateDvnSet(
+                config.layerZero.requiredDVNs, config.layerZero.optionalDVNs, config.layerZero.optionalDVNThreshold
+            );
+
+            // Per-lane overrides, keyed by remote network. Validated here but not carried in the struct: a
+            // nested dynamic array cannot be copied to storage without via_ir, and scripts hold configs in
+            // storage. `ChainConfigLib.dvnsFor` re-reads them when a lane is built.
+            string[] memory overridden;
+            try vm.parseJsonKeys(json, ".adapters.layerZero.dvnOverrides") returns (string[] memory keys) {
+                overridden = keys;
+            } catch {}
+            for (uint256 i; i < overridden.length; i++) {
+                (bool found, address[] memory requiredDVNs, address[] memory optionalDVNs, uint8 threshold) =
+                    dvnOverride(json, overridden[i]);
+                require(found, string.concat("dvnOverrides.", overridden[i], " must name requiredDVNs"));
+                _validateDvnSet(requiredDVNs, optionalDVNs, threshold);
+            }
+        }
+
+        if (config.axelar.deploy) {
+            config.axelar.axelarId = vm.parseJsonString(json, ".adapters.axelar.axelarId");
+            config.axelar.gateway = vm.parseJsonAddress(json, ".adapters.axelar.gateway");
+            config.axelar.gasService = vm.parseJsonAddress(json, ".adapters.axelar.gasService");
+        }
+
+        if (config.chainlink.deploy) {
+            config.chainlink.chainSelector = uint64(vm.parseJsonUint(json, ".adapters.chainlink.chainSelector"));
+            config.chainlink.ccipRouter = vm.parseJsonAddress(json, ".adapters.chainlink.ccipRouter");
+        }
+
+        if (config.hyperlane.deploy) {
+            config.hyperlane.hyperlaneId = uint32(vm.parseJsonUint(json, ".adapters.hyperlane.hyperlaneId"));
+            config.hyperlane.mailbox = vm.parseJsonAddress(json, ".adapters.hyperlane.mailbox");
+            // ISM is optional: a deployment may leave it unset (falls back to the Mailbox default ISM).
+            try vm.parseJsonAddress(json, ".adapters.hyperlane.ism") returns (address val) {
+                config.hyperlane.ism = val;
+            } catch {}
+        }
+    }
+}
+
+library ChainConfigLib {
+    /// @dev LayerZero `UlnBase.NIL_DVN_COUNT` sentinel: explicitly opts out of optional DVNs
+    ///      (vs `0` which means "inherit the endpoint default optional DVN set")
+    uint8 internal constant NIL_DVN_COUNT = type(uint8).max;
+
+    /// @dev LayerZero `MessageLib` config type for `UlnConfig`.
+    uint32 internal constant ULN_CONFIG_TYPE = 2;
+
+    /// @notice The `Root` the chain's config records, or zero where it records none.
+    ///
+    /// @dev    The one deployed address `ChainConfig` answers for, because `ContractsConfig` cannot: until a
+    ///         release is deployed a config records `contracts.root` and nothing else, which
+    ///         `Env.parseContracts` rejects. Re-reads the file, a `ChainConfig` carrying no JSON — from the
+    ///         deployment the config sits in, so it is the same file however many describe the chain
+    function rootAddress(ChainConfig memory config) internal view returns (address) {
+        return Chains.parseRootAddress(Chains.jsonOf(config.network.name, config.network.environment));
+    }
+
+    /// @dev Live-branch consumer only (see `GraphQLConstants`). The ignored receiver is the attachment
+    ///      point: it exists so a caller writes `config.chain.etherscanApiKey()` through `using`.
+    function etherscanApiKey(ChainConfig memory) internal view returns (string memory) {
+        return prettyEnvString("ETHERSCAN_API_KEY");
+    }
+
+    /// @dev Encode the `UlnConfig` for a given LayerZero adapter config. Encodes `optionalDVNCount`
+    ///      as `NIL_DVN_COUNT` when the optional set is empty so the OApp explicitly opts out of
+    ///      inheriting endpoint-level default optional DVNs.
+    function encodeUlnConfig(LayerZeroConfig memory lz) internal pure returns (bytes memory) {
+        uint8 optionalCount = uint8(lz.optionalDVNs.length);
+        return abi.encode(
+            UlnConfig({
+                confirmations: lz.blockConfirmations,
+                requiredDVNCount: uint8(lz.requiredDVNs.length),
+                optionalDVNCount: optionalCount == 0 ? NIL_DVN_COUNT : optionalCount,
+                optionalDVNThreshold: lz.optionalDVNThreshold,
+                requiredDVNs: lz.requiredDVNs,
+                optionalDVNs: lz.optionalDVNs
+            })
+        );
+    }
+
+    /// @notice The LayerZero config this chain uses for its lane to `remote`: its override for that remote
+    ///         where it has one, its default DVN set otherwise.
+    ///
+    /// @dev    Re-reads the file, where the overrides stay (see `_parseAdaptersConfig`).
+    function dvnsFor(ChainConfig memory config, string memory remote) internal view returns (LayerZeroConfig memory) {
+        return dvnsFor(config, Chains.jsonOf(config.network.name, config.network.environment), remote);
+    }
+
+    /// @notice Same, from the config's JSON already read. Returns a new struct, so reassigning its fields
+    ///         leaves `config` alone; without an override its DVN arrays are `config`'s own, not copies.
+    function dvnsFor(ChainConfig memory config, string memory json, string memory remote)
+        internal
+        pure
+        returns (LayerZeroConfig memory lz)
+    {
+        LayerZeroConfig memory base = config.adapters.layerZero;
+        lz = LayerZeroConfig({
+            endpoint: base.endpoint,
+            layerZeroEid: base.layerZeroEid,
+            deploy: base.deploy,
+            blockConfirmations: base.blockConfirmations,
+            requiredDVNs: base.requiredDVNs,
+            optionalDVNs: base.optionalDVNs,
+            optionalDVNThreshold: base.optionalDVNThreshold
+        });
+
+        (bool found, address[] memory requiredDVNs, address[] memory optionalDVNs, uint8 threshold) =
+            Chains.dvnOverride(json, remote);
+        if (!found) return lz;
+
+        lz.requiredDVNs = requiredDVNs;
+        lz.optionalDVNs = optionalDVNs;
+        lz.optionalDVNThreshold = threshold;
+    }
+
+    /// @notice One `SetConfigParam` per connection, in `adapterConnections()` order, which is how the deployer hands
+    ///         each lane's batcher its config. A connection without LayerZero, in its set or wired only, keeps its
+    ///         slot, left empty and never read.
+    function buildLayerZeroConfigParams(ChainConfig memory config)
+        internal
+        view
+        returns (SetConfigParam[] memory params)
+    {
+        if (!config.adapters.layerZero.deploy) return params;
+
+        Connection[] memory connections = config.network.connections();
+        _requireOverridesNameLayerZeroPeers(config, connections);
+
+        params = new SetConfigParam[](connections.length);
+        for (uint256 i; i < connections.length; i++) {
+            if (!connections[i].wiresLayerZero()) continue;
+
+            ChainConfig memory remoteConfig = Chains.load(connections[i].network, config.network.environment);
+            LayerZeroConfig memory local = config.dvnsFor(connections[i].network);
+            LayerZeroConfig memory remote = remoteConfig.dvnsFor(config.network.name);
+
+            require(
+                local.blockConfirmations == remote.blockConfirmations,
+                "blockConfirmations mismatch between local and remote config"
+            );
+            // Both ends of a lane must count the same number of attestations, so the shape (required count,
+            // optional count, threshold) of what each side uses for THIS lane has to match — either end may
+            // override. DVN addresses legitimately differ per chain.
+            // NOTE: the operators have to match too, since a DVN only serves a lane it runs on at both ends,
+            // but only the two configs can say who an address belongs to: a review concern, not a check.
+            require(
+                local.requiredDVNs.length == remote.requiredDVNs.length
+                    && local.optionalDVNs.length == remote.optionalDVNs.length
+                    && local.optionalDVNThreshold == remote.optionalDVNThreshold,
+                "DVN config shape mismatch between local and remote"
+            );
+
+            params[i] =
+                SetConfigParam(remoteConfig.adapters.layerZero.layerZeroEid, ULN_CONFIG_TYPE, encodeUlnConfig(local));
+        }
+    }
+
+    /// @dev An override keyed by a network this chain has no LayerZero lane to is never applied, so the lane it
+    ///      was meant for would fall back to the default set without a word — a typo, a case mismatch or a peer
+    ///      dropped from the connections file. Refused instead.
+    function _requireOverridesNameLayerZeroPeers(ChainConfig memory config, Connection[] memory connections)
+        private
+        view
+    {
+        string memory json = Chains.jsonOf(config.network.name, config.network.environment);
+        string[] memory keys;
+        try vm.parseJsonKeys(json, ".adapters.layerZero.dvnOverrides") returns (string[] memory parsed) {
+            keys = parsed;
+        } catch {
+            return;
+        }
+
+        for (uint256 i; i < keys.length; i++) {
+            bool isPeer;
+            for (uint256 j; j < connections.length && !isPeer; j++) {
+                isPeer = connections[j].wiresLayerZero()
+                    && keccak256(bytes(connections[j].network)) == keccak256(bytes(keys[i]));
+            }
+            require(isPeer, string.concat("dvnOverrides names no LayerZero peer: ", keys[i]));
+        }
+    }
+
+    function adapterConnections(ChainConfig memory config)
+        internal
+        view
+        returns (AdapterConnections[] memory adapterConnections_)
+    {
+        Connection[] memory connections = config.network.connections();
+        adapterConnections_ = new AdapterConnections[](connections.length);
+
+        for (uint256 i; i < connections.length; i++) {
+            ChainConfig memory remoteConfig = Chains.load(connections[i].network, config.network.environment);
+            requireLaneDeployed(connections[i], config, remoteConfig);
+            adapterConnections_[i] = adapterConnection(connections[i], remoteConfig);
+        }
+    }
+
+    /// @notice What the adapter batcher is handed for one lane: an id for every adapter the lane wires, in its
+    ///         set or wired only, and the flags that keep the latter out of the set.
+    function adapterConnection(Connection memory connection, ChainConfig memory remoteConfig)
+        internal
+        pure
+        returns (AdapterConnections memory)
+    {
+        return AdapterConnections({
+            centrifugeId: remoteConfig.network.centrifugeId,
+            layerZeroId: connection.wiresLayerZero() ? remoteConfig.adapters.layerZero.layerZeroEid : 0,
+            axelarId: connection.wiresAxelar() ? remoteConfig.adapters.axelar.axelarId : "",
+            chainlinkId: connection.wiresChainlink() ? remoteConfig.adapters.chainlink.chainSelector : 0,
+            hyperlaneId: connection.wiresHyperlane() ? remoteConfig.adapters.hyperlane.hyperlaneId : 0,
+            threshold: connection.threshold,
+            layerZeroWiredOnly: connection.layerZeroWiredOnly,
+            axelarWiredOnly: connection.axelarWiredOnly,
+            chainlinkWiredOnly: connection.chainlinkWiredOnly,
+            hyperlaneWiredOnly: connection.hyperlaneWiredOnly
+        });
+    }
+
+    /// @notice Every adapter a lane wires is deployed at both of its ends.
+    ///
+    /// @dev    An adapter one end does not deploy gets no id from it, or no adapter to wire with, and the batcher
+    ///         skips it without a word. An adapter in the set would at least be caught where the configs are
+    ///         checked against each other; a wired-only one carries no launch traffic and would not be noticed
+    ///         until a pool reached for it.
+    function requireLaneDeployed(Connection memory connection, ChainConfig memory local, ChainConfig memory remote)
+        internal
+        pure
+    {
+        _requireDeployed(
+            connection.wiresLayerZero(),
+            local.adapters.layerZero.deploy,
+            remote.adapters.layerZero.deploy,
+            local,
+            remote,
+            LAYERZERO
+        );
+        _requireDeployed(
+            connection.wiresAxelar(), local.adapters.axelar.deploy, remote.adapters.axelar.deploy, local, remote, AXELAR
+        );
+        _requireDeployed(
+            connection.wiresChainlink(),
+            local.adapters.chainlink.deploy,
+            remote.adapters.chainlink.deploy,
+            local,
+            remote,
+            CHAINLINK
+        );
+        _requireDeployed(
+            connection.wiresHyperlane(),
+            local.adapters.hyperlane.deploy,
+            remote.adapters.hyperlane.deploy,
+            local,
+            remote,
+            HYPERLANE
+        );
+    }
+
+    function _requireDeployed(
+        bool wired,
+        bool atLocal,
+        bool atRemote,
+        ChainConfig memory local,
+        ChainConfig memory remote,
+        string memory adapter
+    ) private pure {
+        if (!wired) return;
+        string memory lane = string.concat(local.network.name, " <-> ", remote.network.name, ": ");
+        require(atLocal, string.concat(lane, adapter, " is not deployed on ", local.network.name));
+        require(atRemote, string.concat(lane, adapter, " is not deployed on ", remote.network.name));
+    }
+}
+
+library NetworkConfigLib {
+    function buildBatchLimits(NetworkConfig memory config) internal view returns (uint8[32] memory batchLimits) {
+        Connection[] memory connections_ = config.connections();
+        for (uint256 i; i < connections_.length; i++) {
+            ChainConfig memory remoteConfig = Chains.load(connections_[i].network, config.environment);
+
+            uint16 centrifugeId = remoteConfig.network.centrifugeId;
+            require(centrifugeId <= 31, "centrifugeId value higher than 31");
+
+            batchLimits[centrifugeId] = remoteConfig.network.batchLimit;
+        }
+    }
+
+    /// @dev The connections file is the deployment's own — `env/<environment>/connections.json` — so the
+    ///      peers it names are configs of that same directory, and every reader above loads them under
+    ///      `config.environment` rather than under whatever `DEPLOY_ENVIRONMENT` the run did or did not set.
+    ///      A second deployment of the same chains beside the first would otherwise make every peer read
+    ///      ambiguous, or worse, answer with the sibling's addresses.
+    function connections(NetworkConfig memory config) internal view returns (Connection[] memory) {
+        return EnvConnections.load(config.environment).connectionsWith(config.name);
+    }
+
+    /// @dev Resolves the `[rpc_endpoints]` alias named after the network, which is where a base URL and its
+    ///      API key are composed. Keeping that in foundry.toml is what lets `--rpc-url <network>` on the
+    ///      command line and this function reach the same endpoint.
+    /// @dev Live-branch consumer only (see `GraphQLConstants`)
+    function rpcUrl(NetworkConfig memory config) internal view returns (string memory) {
+        return vm.rpcUrl(config.name);
+    }
+
+    /// @notice The explorers this network verifies on; see `Chains.verifiers`
+    /// @dev Live-branch consumer only (see `GraphQLConstants`)
+    function verifiers(NetworkConfig memory config) internal view returns (VerifierConfig[] memory) {
+        return Chains.verifiers(Chains.jsonOf(config.name, config.environment));
+    }
+
+    function isMainnet(NetworkConfig memory config) internal pure returns (bool) {
+        return keccak256(bytes(Chains.baseEnvironmentOf(config.environment))) == keccak256("mainnet");
+    }
+
+    /// @dev Live-branch consumer only (see `GraphQLConstants`)
+    function graphQLApi(NetworkConfig memory config) internal pure returns (string memory) {
+        return config.isMainnet() ? GraphQLConstants.MAINNET_API : GraphQLConstants.TESTNET_API;
+    }
+}
+
+/// @dev Live-branch consumer only (see `GraphQLConstants`)
+function prettyEnvString(string memory name) view returns (string memory value) {
+    value = vm.envOr(name, string(""));
+    if (bytes(value).length == 0) revert(string.concat("Missing env var: ", name));
+}

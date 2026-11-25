@@ -1,0 +1,310 @@
+# Auto-label PRs based on changed file paths.
+# Works identically on centrifuge/protocol and centrifuge/protocol-internal.
+#
+# Labeling rules (all matching labels are applied):
+#
+# Scope labels:
+#   scope:contracts  — any .sol file (not .t.sol/.s.sol) under src/ or src-ir/,
+#                       excluding */interfaces/ dirs
+#   scope:tests      — any file under test/
+#   scope:invariant  — invariant/fuzz test files (test/**/recon*, echidna.yaml, medusa.json)
+#   scope:scripts    — any file under script/ (unless scope:tooling applies)
+#   scope:tooling    — ALL files under script/ AND none contain "deploy" in path
+#   scope:infra      — .github/, lib/, foundry.toml, slither.config.json,
+#                       remappings.txt, .gitmodules
+#   scope:env        — any file under env/
+#
+# Audit flag:
+#   audit:needed     — a scope:contracts file outside src/deployment/ and src/spell/
+#                       whose patch changes at least one line that is not blank or
+#                       a comment (a file without a patch counts as code). Never on
+#                       sync PRs (base live-v*, head main or merge-live-v*), whose
+#                       changes were flagged on their own PRs to main.
+#
+# Type labels (at most one, requires ALL files to match):
+#   type:test        — only non-infra files are under test/
+#   type:docs        — only .md files or files under docs/
+#   type:chore       — only infra/config files
+#
+# The workflow owns the scope:* labels and audit:needed: each run removes the ones
+# the current diff no longer supports, except audit:needed once audit:in-review or
+# audit:passed is set. All other labels are only ever added.
+
+name: Auto Label PRs
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  auto-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply labels based on changed files
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const prNumber = pr.number;
+
+            // ── Step 1: Fetch all changed files (paginated) ──
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              { owner, repo, pull_number: prNumber, per_page: 100 }
+            );
+            const filenames = files.map(f => f.filename);
+
+            if (filenames.length === 0) {
+              core.info('No changed files found, skipping.');
+              return;
+            }
+
+            // ── Step 2: Classify each file ──
+            const INFRA_EXACT = new Set([
+              'foundry.toml', 'slither.config.json', 'remappings.txt', '.gitmodules'
+            ]);
+            // Fuzzer config files at repo root
+            const INVARIANT_EXACT = new Set(['echidna.yaml', 'medusa.json']);
+
+            // True when a changed line in the patch is code. Block-comment state is
+            // tracked per hunk because a line starting with `*` can also be an
+            // expression continuation; a hunk opening inside a block comment
+            // therefore reads as code, which errs towards flagging.
+            const patchChangesCode = (patch) => {
+              if (patch === undefined) return true;
+              let inBlock = false;
+              for (const raw of patch.split('\n')) {
+                if (raw.startsWith('@@')) { inBlock = false; continue; }
+                if (raw.startsWith('\\')) continue;
+                const changed = raw.startsWith('+') || raw.startsWith('-');
+                const line = raw.slice(1).trim();
+                let isComment;
+                if (inBlock) {
+                  isComment = true;
+                  const close = line.indexOf('*/');
+                  if (close !== -1) {
+                    inBlock = false;
+                    isComment = line.slice(close + 2).trim() === '';
+                  }
+                } else if (line === '' || line.startsWith('//')) {
+                  isComment = true;
+                } else if (line.startsWith('/*')) {
+                  const close = line.indexOf('*/', 2);
+                  if (close === -1) {
+                    inBlock = true;
+                    isComment = true;
+                  } else {
+                    isComment = line.slice(close + 2).trim() === '';
+                  }
+                } else {
+                  isComment = false;
+                }
+                if (changed && !isComment) return true;
+              }
+              return false;
+            };
+
+            let hasContract = false;
+            let hasAuditable = false;    // production contract code changed
+            let hasTest = false;
+            let hasInvariant = false;   // recon/echidna/medusa invariant tests
+            let hasScript = false;
+            let hasScriptDeploy = false; // script file with "deploy" in path
+            let hasInfra = false;
+            let hasEnv = false;
+            let hasDocs = false;
+            let hasOther = false;        // files that don't fit any category above
+
+            for (const file of files) {
+              const f = file.filename;
+              const lower = f.toLowerCase();
+              let matched = false;
+
+              // Source tree files: contracts, plus interfaces, READMEs and the like
+              if (f.startsWith('src/') || f.startsWith('src-ir/')) {
+                matched = true;
+                const isContract =
+                  f.endsWith('.sol') &&
+                  !f.endsWith('.t.sol') &&
+                  !f.endsWith('.s.sol') &&
+                  !f.includes('/interfaces/');
+                if (isContract) {
+                  hasContract = true;
+                  if (
+                    !f.startsWith('src/deployment/') &&
+                    !f.startsWith('src/spell/') &&
+                    patchChangesCode(file.patch)
+                  ) {
+                    hasAuditable = true;
+                  }
+                } else if (!f.endsWith('.md')) {
+                  hasOther = true;
+                }
+              }
+
+              // Tests
+              if (f.startsWith('test/')) {
+                hasTest = true;
+                matched = true;
+                // Invariant/fuzz tests live under test/**/recon*
+                if (f.includes('/recon')) {
+                  hasInvariant = true;
+                }
+              }
+
+              // Root-level fuzzer configs (echidna.yaml, medusa.json)
+              if (INVARIANT_EXACT.has(f)) {
+                hasInvariant = true;
+                hasTest = true;
+                matched = true;
+              }
+
+              // Scripts
+              if (f.startsWith('script/')) {
+                hasScript = true;
+                matched = true;
+                // broadcast/ is gitignored so only "deploy" matters here
+                if (lower.includes('deploy')) {
+                  hasScriptDeploy = true;
+                }
+              }
+
+              // Infra: .github/, lib/, or specific root config files
+              if (
+                f.startsWith('.github/') ||
+                f.startsWith('lib/') ||
+                INFRA_EXACT.has(f)
+              ) {
+                hasInfra = true;
+                matched = true;
+              }
+
+              // Env: deployment addresses and network configs
+              if (f.startsWith('env/')) {
+                hasEnv = true;
+                matched = true;
+              }
+
+              // Docs: .md files anywhere or anything under docs/
+              if (f.endsWith('.md') || f.startsWith('docs/')) {
+                hasDocs = true;
+                matched = true;
+              }
+
+              if (!matched) {
+                hasOther = true;
+              }
+            }
+
+            // ── Step 3: Determine scope labels ──
+            const labels = [];
+
+            if (hasContract) {
+              labels.push('scope:contracts');
+            }
+
+            if (hasTest) {
+              labels.push('scope:tests');
+            }
+
+            if (hasInvariant) {
+              labels.push('scope:invariant');
+            }
+
+            // scope:tooling vs scope:scripts — mutually exclusive
+            if (hasScript) {
+              const allFilesAreScripts = filenames.every(f => f.startsWith('script/'));
+              if (allFilesAreScripts && !hasScriptDeploy) {
+                labels.push('scope:tooling');
+              } else {
+                labels.push('scope:scripts');
+              }
+            }
+
+            if (hasInfra) {
+              labels.push('scope:infra');
+            }
+
+            if (hasEnv) {
+              labels.push('scope:env');
+            }
+
+            // ── Step 4: Audit flag ──
+            const isSync =
+              pr.base.ref.startsWith('live-v') &&
+              (pr.head.ref === 'main' || pr.head.ref.startsWith('merge-live-v'));
+            if (hasAuditable && !isSync) {
+              labels.push('audit:needed');
+            }
+
+            // ── Step 5: Type labels (at most one) ──
+            // type:test — only non-infra files are tests (includes invariant)
+            if (hasTest && !hasContract && !hasScript && !hasDocs && !hasEnv && !hasOther) {
+              labels.push('type:test');
+            }
+            // type:docs — every file is .md or under docs/
+            else if (hasDocs && !hasContract && !hasTest && !hasScript && !hasInfra && !hasEnv && !hasOther) {
+              labels.push('type:docs');
+            }
+            // type:chore — every file is infra/config
+            else if (hasInfra && !hasContract && !hasTest && !hasScript && !hasDocs && !hasEnv && !hasOther) {
+              labels.push('type:chore');
+            }
+
+            // ── Step 6: Reconcile against existing PR labels ──
+            const { data: prData } = await github.rest.pulls.get({
+              owner, repo, pull_number: prNumber
+            });
+            const existingLabels = new Set(prData.labels.map(l => l.name));
+            const newLabels = labels.filter(l => !existingLabels.has(l));
+
+            const OWNED = [
+              'scope:contracts', 'scope:tests', 'scope:invariant', 'scope:scripts',
+              'scope:tooling', 'scope:infra', 'scope:env', 'audit:needed'
+            ];
+            const auditOwnedByHuman =
+              existingLabels.has('audit:in-review') || existingLabels.has('audit:passed');
+            const staleLabels = OWNED.filter(l =>
+              existingLabels.has(l) &&
+              !labels.includes(l) &&
+              !(l === 'audit:needed' && auditOwnedByHuman)
+            );
+
+            for (const name of staleLabels) {
+              await github.rest.issues.removeLabel({
+                owner, repo, issue_number: prNumber, name
+              });
+            }
+            if (staleLabels.length > 0) {
+              core.info(`Removed labels: ${staleLabels.join(', ')}`);
+            }
+
+            if (newLabels.length > 0) {
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: prNumber, labels: newLabels
+              });
+              core.info(`Added labels: ${newLabels.join(', ')}`);
+            } else {
+              core.info('All labels already present, nothing to add.');
+            }
+
+            // ── Step 7: Comment on first run only ──
+            const MARKER = '<!-- auto-label -->';
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number: prNumber, per_page: 100 }
+            );
+            const alreadyCommented = comments.some(c => c.body.includes(MARKER));
+
+            if (!alreadyCommented && newLabels.length > 0) {
+              const labelList = labels.map(l => '`' + l + '`').join(', ');
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: prNumber,
+                body: `${MARKER}\nAuto-labeled: ${labelList}. Please verify and add type/version labels manually.`
+              });
+            }
